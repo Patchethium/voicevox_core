@@ -20,6 +20,7 @@ required-features = ["load-onnxruntime"]
 default = []
 load-onnxruntime = ["voicevox-ort/load-dynamic"]
 link-onnxruntime = []
+specta = ["dep:specta", "dep:specta-typescript"]
 
 [dependencies]
 anyhow.workspace = true
@@ -60,6 +61,8 @@ tracing.workspace = true
 uuid = { workspace = true, features = ["v4", "serde"] }
 voicevox-ort = { workspace = true, features = ["download-binaries", "__init-for-voicevox"] }
 voicevox_core_macros.workspace = true
+specta = {workspace = true, optional = true, features = ["derive", "uuid"]}
+specta-typescript = {workspace = true, optional = true}
 
 [dev-dependencies]
 divan.workspace = true

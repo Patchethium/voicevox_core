@@ -41,6 +41,9 @@ pub(super) type ModelBytesWithInnerVoiceIdsByDomain = inference_domain_map_value
     for<D> Option<(StyleIdToInnerVoiceId, EnumMap<D::Operation, ModelBytes>)>
 );
 
+#[cfg(feature = "specta")]
+use specta::Type;
+
 /// 音声モデルID。
 ///
 /// `Synthesizer`はこのIDをキーとして、音声モデルのロード・アンロードを行う。
@@ -54,7 +57,8 @@ pub(super) type ModelBytesWithInnerVoiceIdsByDomain = inference_domain_map_value
 ///
 /// [VOICEVOX/voicevox_vvm]: https://github.com/VOICEVOX/voicevox_vvm
 /// [VOICEVOX/voicevox_vvm#19]: https://github.com/VOICEVOX/voicevox_vvm/issues/19
-#[cfg_attr(doc, doc(alias = "VoicevoxVoiceModelId"))]
+#[cfg_attr(feature = "specta", derive(Type))]
+// #[cfg_attr(doc, doc(alias = "VoicevoxVoiceModelId"))] // remove the doc can please specta, I don't know why
 #[derive(
     PartialEq,
     Eq,

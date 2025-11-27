@@ -7,6 +7,9 @@ use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
+#[cfg(feature = "specta")]
+use specta::Type;
+
 /// [`speaker_uuid`]をキーとして複数の[`CharacterMeta`]をマージする。
 ///
 /// マージする際キャラクターは[`CharacterMeta::order`]、スタイルは[`StyleMeta::order`]をもとに安定ソートされる。
@@ -44,6 +47,7 @@ pub fn merge<'a>(metas: impl IntoIterator<Item = &'a CharacterMeta>) -> Vec<Char
 ///
 /// [<i>キャラクター</i>]: CharacterMeta
 /// [<i>スタイル</i>]: StyleMeta
+#[cfg_attr(feature = "specta", derive(Type))]
 #[derive(
     PartialEq,
     Eq,
@@ -64,8 +68,8 @@ pub fn merge<'a>(metas: impl IntoIterator<Item = &'a CharacterMeta>) -> Vec<Char
     Octal,
     Binary,
 )]
-#[cfg_attr(doc, doc(alias = "VoicevoxStyleId"))]
-pub struct StyleId(pub u32);
+// #[cfg_attr(doc, doc(alias = "VoicevoxStyleId"))] // remove the doc can please specta, I don't know why
+pub struct StyleId(pub u32); // rust-analyzer may produce an error here, but cargo check seems happy.
 
 impl Display for StyleId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -76,10 +80,11 @@ impl Display for StyleId {
 /// [<i>キャラクター</i>]のバージョン。
 ///
 /// [<i>キャラクター</i>]: CharacterMeta
+#[cfg_attr(feature = "specta", derive(Type))]
 #[derive(
     PartialEq, Eq, Clone, Ord, PartialOrd, Deserialize, Serialize, new, Hash, Debug, AsRef, AsMut,
 )]
-pub struct CharacterVersion(pub String);
+pub struct CharacterVersion(pub String); // same issue as StyleId.
 
 impl Display for CharacterVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -91,6 +96,7 @@ impl Display for CharacterVersion {
 pub type VoiceModelMeta = Vec<CharacterMeta>;
 
 /// <i>キャラクター</i>のメタ情報。
+#[cfg_attr(feature = "specta", derive(Type))]
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[non_exhaustive]
 pub struct CharacterMeta {
@@ -151,6 +157,7 @@ impl CharacterMeta {
 }
 
 /// <i>スタイル</i>のメタ情報。
+#[cfg_attr(feature = "specta", derive(Type))]
 #[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
 #[non_exhaustive]
 pub struct StyleMeta {
@@ -170,6 +177,7 @@ pub struct StyleMeta {
 /// [<i>スタイル</i>]に対応するモデルの種類。
 ///
 /// [<i>スタイル</i>]: StyleMeta
+#[cfg_attr(feature = "specta", derive(Type))]
 #[derive(
     Default,
     Clone,

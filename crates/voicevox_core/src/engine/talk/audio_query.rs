@@ -2,6 +2,9 @@ mod validated;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "specta")]
+use specta::Type;
+
 pub(crate) use self::validated::{
     LengthedPhoneme, ValidatedAccentPhrase, ValidatedAudioQuery, ValidatedMora,
 };
@@ -18,6 +21,7 @@ pub use self::validated::Validate;
 ///
 /// [`ErrorKind::InvalidQuery`]: crate::ErrorKind::InvalidQuery
 /// [`validate`メソッド]: Self::validate
+#[cfg_attr(feature = "specta", derive(Type))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[non_exhaustive]
 pub struct Mora {
@@ -43,6 +47,7 @@ pub struct Mora {
 ///
 /// [`ErrorKind::InvalidQuery`]: crate::ErrorKind::InvalidQuery
 /// [`validate`メソッド]: Self::validate
+#[cfg_attr(feature = "specta", derive(Type))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[non_exhaustive]
 pub struct AccentPhrase {
@@ -81,6 +86,7 @@ impl AccentPhrase {
 ///
 /// [`ErrorKind::InvalidQuery`]: crate::ErrorKind::InvalidQuery
 /// [`validate`メソッド]: Self::validate
+#[cfg_attr(feature = "specta", derive(Type))]
 #[derive(Clone, PartialEq, Debug, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct AudioQuery {
