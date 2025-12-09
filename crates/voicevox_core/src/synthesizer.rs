@@ -36,7 +36,7 @@ use crate::{
         },
         pad_decoder_feature,
         status::Status,
-        voice_model,
+        voice_model, Array1ExtForPostProcess as _, Array1ExtForPreProcess as _, ArrayExt as _,
     },
     engine::{
         talk::{
@@ -559,8 +559,8 @@ trait AsInner {
         return Ok(new_accent_phrases);
 
         #[ext]
-        impl LengthedPhoneme {
-            fn with_length(&self, length: f32) -> LengthedPhoneme {
+        impl<P: Clone> LengthedPhoneme<P> {
+            fn with_length(&self, length: f32) -> LengthedPhoneme<P> {
                 LengthedPhoneme {
                     phoneme: self.phoneme.clone(),
                     length,
@@ -1113,7 +1113,7 @@ impl<R: InferenceRuntime> Status<R> {
         vowel: ndarray::Array1<i64>,
         note_duration: ndarray::Array1<i64>,
         style_id: StyleId,
-    ) -> Result<ndarray::Array2<i64>> {
+    ) -> Result<ndarray::Array1<i64>> {
         let (model_id, inner_voice_id) = self.ids_for::<SingingTeacherDomain>(style_id)?;
 
         let PredictSingConsonantLengthOutput { consonant_lengths } = self
@@ -1129,7 +1129,7 @@ impl<R: InferenceRuntime> Status<R> {
             )
             .await?;
 
-        Ok(consonant_lengths)
+        consonant_lengths.squeeze_into_1d()
     }
 
     async fn predict_sing_f0<A: infer::AsyncExt>(
@@ -1137,7 +1137,7 @@ impl<R: InferenceRuntime> Status<R> {
         phoneme: ndarray::Array1<i64>,
         note: ndarray::Array1<i64>,
         style_id: StyleId,
-    ) -> Result<ndarray::Array2<f32>> {
+    ) -> Result<ndarray::Array1<f32>> {
         let (model_id, inner_voice_id) = self.ids_for::<SingingTeacherDomain>(style_id)?;
 
         let PredictSingF0Output { f0s } = self
@@ -1152,7 +1152,7 @@ impl<R: InferenceRuntime> Status<R> {
             )
             .await?;
 
-        Ok(f0s)
+        f0s.squeeze_into_1d()
     }
 
     async fn predict_sing_volume<A: infer::AsyncExt>(
@@ -1161,7 +1161,7 @@ impl<R: InferenceRuntime> Status<R> {
         note: ndarray::Array1<i64>,
         f0: ndarray::Array1<f32>,
         style_id: StyleId,
-    ) -> Result<ndarray::Array2<f32>> {
+    ) -> Result<ndarray::Array1<f32>> {
         let (model_id, inner_voice_id) = self.ids_for::<SingingTeacherDomain>(style_id)?;
 
         let PredictSingVolumeOutput { volumes } = self
@@ -1177,7 +1177,7 @@ impl<R: InferenceRuntime> Status<R> {
             )
             .await?;
 
-        Ok(volumes)
+        volumes.squeeze_into_1d()
     }
 
     async fn sf_decode<A: infer::AsyncExt>(
@@ -1187,7 +1187,7 @@ impl<R: InferenceRuntime> Status<R> {
         volume: ndarray::Array1<f32>,
         style_id: StyleId,
         cancellable: A::Cancellable,
-    ) -> Result<ndarray::Array2<f32>> {
+    ) -> Result<ndarray::Array1<f32>> {
         let (model_id, inner_voice_id) = self.ids_for::<FrameDecodeDomain>(style_id)?;
 
         let SfDecodeOutput { wav } = self
@@ -1203,26 +1203,7 @@ impl<R: InferenceRuntime> Status<R> {
             )
             .await?;
 
-        Ok(wav)
-    }
-}
-
-#[ext]
-impl<T> ndarray::Array1<T> {
-    fn into_one_row(self) -> ndarray::Array2<T> {
-        let n = self.len();
-        self.into_shape_with_order([1, n]).expect("should be ok")
-    }
-
-    fn into_vec(self) -> Vec<T> {
-        let (vec, offset) = self.into_raw_vec_and_offset();
-        // TODO: Rust 2024にしたらlet chainにする
-        if let Some(offset) = offset {
-            if offset != 0 {
-                unimplemented!("offset = {offset}");
-            }
-        }
-        vec
+        wav.squeeze_into_1d()
     }
 }
 
@@ -1804,7 +1785,7 @@ pub(crate) mod blocking {
             vowel: ndarray::Array1<i64>,
             note_duration: ndarray::Array1<i64>,
             style_id: StyleId,
-        ) -> crate::Result<ndarray::Array2<i64>> {
+        ) -> crate::Result<ndarray::Array1<i64>> {
             self.0
                 .status
                 .predict_sing_consonant_length::<SingleTasked>(
@@ -1821,7 +1802,7 @@ pub(crate) mod blocking {
             phoneme: ndarray::Array1<i64>,
             note: ndarray::Array1<i64>,
             style_id: StyleId,
-        ) -> crate::Result<ndarray::Array2<f32>> {
+        ) -> crate::Result<ndarray::Array1<f32>> {
             self.0
                 .status
                 .predict_sing_f0::<SingleTasked>(phoneme, note, style_id)
@@ -1834,7 +1815,7 @@ pub(crate) mod blocking {
             note: ndarray::Array1<i64>,
             f0: ndarray::Array1<f32>,
             style_id: StyleId,
-        ) -> crate::Result<ndarray::Array2<f32>> {
+        ) -> crate::Result<ndarray::Array1<f32>> {
             self.0
                 .status
                 .predict_sing_volume::<SingleTasked>(phoneme, note, f0, style_id)
@@ -1847,7 +1828,7 @@ pub(crate) mod blocking {
             f0: ndarray::Array1<f32>,
             volume: ndarray::Array1<f32>,
             style_id: StyleId,
-        ) -> crate::Result<ndarray::Array2<f32>> {
+        ) -> crate::Result<ndarray::Array1<f32>> {
             self.0
                 .status
                 .sf_decode::<SingleTasked>(phoneme, f0, volume, style_id, ())
