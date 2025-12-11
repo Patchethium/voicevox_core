@@ -13,6 +13,9 @@ use std::{collections::BTreeSet, fmt::Debug, path::PathBuf};
 use thiserror::Error;
 use uuid::Uuid;
 
+#[cfg(feature = "specta")]
+use specta::Type;
+
 /// VOICEVOX COREのエラー。
 #[derive(Error, Debug)]
 #[error(transparent)]
@@ -136,6 +139,7 @@ pub(crate) enum ErrorRepr {
     reason = "バインディングを作るときはexhaustiveとして扱いたい"
 )]
 #[cfg_attr(doc, doc(alias = "VoicevoxResultCode"))]
+#[cfg_attr(feature = "specta", derive(Type))]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum ErrorKind {
     /// open_jtalk辞書ファイルが読み込まれていない。
@@ -180,7 +184,8 @@ pub enum ErrorKind {
     InvalidWord,
     /// AudioQuery、もしくはその一部が不正。
     InvalidQuery,
-    #[doc(hidden)]
+    // IDK why but removing this doc pleasures specta
+    // #[doc(hidden)]
     __NonExhaustive,
 }
 

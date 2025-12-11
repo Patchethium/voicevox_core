@@ -15,6 +15,9 @@ use std::{
 };
 use tracing::info;
 
+#[cfg(feature = "specta")]
+use specta::Type;
+
 use crate::{
     asyncs::{Async, BlockingThreadPool, SingleTasked},
     core::{
@@ -97,6 +100,7 @@ impl<A: infer::AsyncExt> AsRef<SynthesisOptions<A>> for TtsOptions<A> {
     clippy::manual_non_exhaustive,
     reason = "バインディングを作るときはexhaustiveとして扱いたい"
 )]
+#[cfg_attr(feature = "specta", derive(Type))]
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AccelerationMode {
     /// 実行環境に合った適切なハードウェアアクセラレーションモードを選択する。
@@ -106,7 +110,8 @@ pub enum AccelerationMode {
     Cpu,
     /// ハードウェアアクセラレーションモードを"GPU"に設定する。
     Gpu,
-    #[doc(hidden)]
+    // IDK why but removing this doc pleasures specta
+    // #[doc(hidden)]
     __NonExhaustive,
 }
 
