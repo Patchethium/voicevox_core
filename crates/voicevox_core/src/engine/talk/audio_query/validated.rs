@@ -27,8 +27,8 @@ impl Mora {
     /// 次のうちどれかを満たすなら[`ErrorKind::InvalidQuery`]を表わすエラーを返す。
     ///
     /// - [`consonant`]と[`consonant_length`]の有無が不一致。
-    /// - [`consonant`]が子音以外の音素であるか、もしくは音素として不正。
-    /// - [`vowel`]が子音であるか、もしくは音素として不正。
+    /// - [`consonant`]が子音以外の音素であるか、もしくは[`Phoneme`]として不正。
+    /// - [`vowel`]が子音であるか、もしくは[`Phoneme`]として不正。
     ///
     /// # Warnings
     ///
@@ -39,6 +39,7 @@ impl Mora {
     /// - [`pitch`]がNaNもしくは±infinity。
     ///
     /// [`ErrorKind::InvalidQuery`]: crate::ErrorKind::InvalidQuery
+    /// [`Phoneme`]: crate::Phoneme
     /// [`WARN`]: tracing::Level::WARN
     /// [`consonant`]: Self::consonant
     /// [`consonant_length`]: Self::consonant_length
@@ -135,17 +136,24 @@ impl AudioQuery {
 }
 
 pub trait Validate: DeserializeOwned {
+    const NAME: &str;
     fn validate(&self) -> crate::Result<()>;
+
+    fn validation_error_description() -> String {
+        format!("不正な{}です", Self::NAME)
+    }
 }
 
 #[duplicate_item(
-    T validation;
-    [ AudioQuery ] [ Self::validate ];
-    [ AccentPhrase ] [ Self::validate ];
-    [ Mora ] [ Self::validate ];
-    [ Vec<AccentPhrase> ] [ |this: &Self| this.iter().try_for_each(AccentPhrase::validate) ];
+    T S validation;
+    [ AudioQuery ] [ "AudioQuery" ] [ Self::validate ];
+    [ AccentPhrase ] [ "アクセント句" ] [ Self::validate ];
+    [ Mora ] [ "モーラ" ] [ Self::validate ];
+    [ Vec<AccentPhrase> ] [ "アクセント句の列" ] [ |this: &Self| this.iter().try_for_each(AccentPhrase::validate) ];
 )]
 impl Validate for T {
+    const NAME: &str = S;
+
     fn validate(&self) -> crate::Result<()> {
         (validation)(self)
     }
@@ -243,7 +251,7 @@ impl<'original> ValidatedMora<'original> {
 
         fn error(source: InvalidQueryErrorSource) -> InvalidQueryError {
             InvalidQueryError {
-                what: "モーラ",
+                what: Mora::NAME,
                 value: None,
                 source: Some(source),
             }
@@ -397,7 +405,7 @@ impl<'original> ValidatedAccentPhrase<'original> {
 
         fn error(source: InvalidQueryErrorSource) -> InvalidQueryError {
             InvalidQueryError {
-                what: "アクセント句",
+                what: AccentPhrase::NAME,
                 value: None,
                 source: Some(source),
             }
@@ -499,15 +507,10 @@ impl<'original> ValidatedAudioQuery<'original> {
             })
             .collect::<Result<_, _>>()?;
 
-        let output_sampling_rate = SamplingRate::new(*output_sampling_rate).ok_or_else(|| {
+        let output_sampling_rate = SamplingRate::new_(*output_sampling_rate).map_err(|source| {
             error(InvalidQueryErrorSource::InvalidFields {
                 fields: "`output_sampling_rate`/`outputSamplingRate`".to_owned(),
-                source: InvalidQueryError {
-                    what: "サンプリングレート",
-                    value: Some(Box::new(*output_sampling_rate) as _),
-                    source: Some(InvalidQueryErrorSource::IsNotMultipleOfBaseSamplingRate),
-                }
-                .into(),
+                source: source.into(),
             })
         })?;
 
@@ -528,7 +531,7 @@ impl<'original> ValidatedAudioQuery<'original> {
 
         fn error(source: InvalidQueryErrorSource) -> InvalidQueryError {
             InvalidQueryError {
-                what: "AudioQuery",
+                what: AudioQuery::NAME,
                 value: None,
                 source: Some(source),
             }
@@ -590,7 +593,7 @@ impl From<ValidatedAudioQuery<'_>> for AudioQuery {
             volume_scale,
             pre_phoneme_length,
             post_phoneme_length,
-            output_sampling_rate: output_sampling_rate.get(),
+            output_sampling_rate: output_sampling_rate.get().get(),
             output_stereo,
             kana,
         }

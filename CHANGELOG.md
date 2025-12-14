@@ -35,11 +35,13 @@
 - chore: [0.15] remove obsolete parts ([#896])
 - Merge `0.15.5` ([#894])
 - feat: ソングの推論結果を、コア領域の責務としてsqueezeする (#1217)
+- [#1236]
 
 [#732]: https://github.com/VOICEVOX/voicevox_core/pull/732
 [#896]: https://github.com/VOICEVOX/voicevox_core/pull/896
 [#894]: https://github.com/VOICEVOX/voicevox_core/pull/894
 [#1217]: https://github.com/VOICEVOX/voicevox_core/pull/1217
+[#1236]: https://github.com/VOICEVOX/voicevox_core/pull/1236
 
 ### ストリーミングAPI
 
@@ -66,6 +68,14 @@
 
 [@phenylshima]: https://github.com/phenylshima
 -->
+
+### Changed
+
+- \[Python,Java\] `AudioQuery`（もしくはその一部）がRustのオブジェクトとして表現できなかったときのエラーが、`InvalidQuery`エラーに包まれるようになります。これまでは`OverflowError`や`RuntimeError`がそのままraiseされていました ([#1237])。
+
+### Fixed
+
+- \[Java\] 各`validate`メソッドのJavadocにおいて、浮動小数点数がNaNあるいは±infinityだったときの扱いの記述が実態に則したものへと訂正されます ([#1237])。
 
 ## [0.16.3] - 2025-12-08 (+09:00)
 
@@ -1398,6 +1408,7 @@ Windows版ダウンローダーのビルドに失敗しています。
 [#1223]: https://github.com/VOICEVOX/voicevox_core/pull/1223
 [#1224]: https://github.com/VOICEVOX/voicevox_core/pull/1224
 [#1227]: https://github.com/VOICEVOX/voicevox_core/pull/1227
+[#1237]: https://github.com/VOICEVOX/voicevox_core/pull/1237
 
 [VOICEVOX/onnxruntime-builder#25]: https://github.com/VOICEVOX/onnxruntime-builder/pull/25
 

@@ -317,9 +317,12 @@ pub use self::{
         metas::{CharacterMeta, CharacterVersion, StyleId, StyleMeta, StyleType, VoiceModelMeta},
         voice_model::VoiceModelId,
     },
-    engine::talk::{
-        user_dict::{UserDictWord, UserDictWordBuilder, UserDictWordType},
-        AccentPhrase, AudioQuery, Mora,
+    engine::{
+        talk::{
+            user_dict::{UserDictWord, UserDictWordBuilder, UserDictWordType},
+            AccentPhrase, AudioQuery, Mora,
+        },
+        Phoneme, SamplingRate, Sil,
     },
     error::{Error, ErrorKind},
     result::Result,
