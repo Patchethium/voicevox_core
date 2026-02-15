@@ -25,24 +25,6 @@
 
 [#1056]: https://github.com/VOICEVOX/voicevox_core/pull/1056
 
-### ソング
-
-- [project-s] ピッチ輪郭推論を追加 ([#531])
-- [project-s] モデルへの入力の形・データを修正 ([#732])
-- [project-s] スタイルタイプの名称変更 ([#738])
-- `StyleMeta::r#type`を追加し、トークという区分を実装に導入する ([#761])
-- fix: fix up #761: JavaとPythonの`StyleType`を埋める ([#895])
-- chore: [0.15] remove obsolete parts ([#896])
-- Merge `0.15.5` ([#894])
-- feat: ソングの推論結果を、コア領域の責務としてsqueezeする (#1217)
-- [#1236]
-
-[#732]: https://github.com/VOICEVOX/voicevox_core/pull/732
-[#896]: https://github.com/VOICEVOX/voicevox_core/pull/896
-[#894]: https://github.com/VOICEVOX/voicevox_core/pull/894
-[#1217]: https://github.com/VOICEVOX/voicevox_core/pull/1217
-[#1236]: https://github.com/VOICEVOX/voicevox_core/pull/1236
-
 ### ストリーミングAPI
 
 - split decoder into spectrogram and vocoder without changing API ([#851])
@@ -69,15 +51,49 @@
 [@phenylshima]: https://github.com/phenylshima
 -->
 
+### Added
+
+- ソング機能が追加されます ([#531], [#732], [#738], [#761], [#895], [#896], [#894], [#1217], [#1236], [#1073], [#1242], [#1250], [#1252], [#1247], [#1253], [#1244], [#1257], [#1255], [#1260], [#1245], [#1246], [#1280], [#1285], [#1279])。
+- ドキュメントが改善されます。
+    - [バージョン0.16.3](#0163---2025-12-08-0900)で導入された、`AudioQuery`/`AccentPhrase`/`Mora`のバリデーション機能に関するドキュメンテーションがよりわかりやすくなります ([#1251])。
+    - \[Python,Java\] 一部のドキュメントの文体が改善されます ([#1238])。
+- \[Android\] リリースされるバイナリが[16KBデバイスへの互換性を持つようになり、Google Playが要求する要件を満たす](https://developer.android.com/guide/practices/page-sizes)ようになります。ただし(VOICEVOX) ONNX Runtimeのバージョン1.17は16KBへの互換性が無いことに注意してください。(VOICEVOX) ONNX Runtime バージョン1.22以降であれば対応しています ([#1283])。
+- \[ダウンローダー\] HTTPクライアントのものを含めた、いくつかの依存ライブラリがアップデートされます ([#1265])。
+
 ### Changed
 
+- ONNX Runtimeが出す`FATAL`レベルのログの表示形式が少しだけ変わります。また`VERBOSE`レベルのログは[`tracing::Level::TRACE`](https://docs.rs/tracing/0.1/tracing/struct.Level.html#associatedconstant.TRACE)に格下げされます ([#1276])。
 - \[Python,Java\] `AudioQuery`（もしくはその一部）がRustのオブジェクトとして表現できなかったときのエラーが、`InvalidQuery`エラーに包まれるようになります。これまでは`OverflowError`や`RuntimeError`がそのままraiseされていました ([#1237])。
+- \[Rust\] 依存ライブラリが変化します ([#1073], [#1250], [#1265], [#1277], [#1276], [#1291])。
+    - \[追加\] `arrayvec@0.7`: `^0.7.6`
+    - \[追加\] `derive_more@1`: `into_iterator`フィーチャを追加
+    - \[追加\] `num-traits@0.2`: `^0.2.15`
+    - \[追加\] `smol_str@0.3`: `^0.3.2`
+    - \[追加\] `typed_floats@1`: `^1.0.7`
+    - \[追加\] `typeshare@1`: `^1.0.4` (`default-features = false`)
+    - \[変更\] `bytes@1`: `^1.7.2` → `^1.11.1`
+    - \[変更\] `regex@1`: `^1.11.0` → `^1.12.0`
+    - \[変更\] `serde@1`: `^1.0.27` → `^1.0.228`
+    - \[変更\] `voicevox-ort@2.0.0-rc.10`: `22172d0fcf0715c1316f95ea08db50cf55cf0ad4` → `6d69dbd1ddfae713081d844c456be5b8d097e17e`
+- \[Python\] 型ヒントが[`uuid.UUID`](https://docs.python.org/3/library/uuid.html#uuid.UUID)である引数に、`uuid.UUID`ではないオブジェクトを与えたときのエラーが`TypeError`になります ([#1266])。
 
 ### Fixed
 
+- \[Python\] `Onnxruntime.load_once`は[デッドロックする可能性](https://pyo3.rs/v0.13.0/faq#im-experiencing-deadlocks-using-pyo3-with-lazy_static-or-once_cell)がありましたが、解消されます ([#1266])。
 - \[Java\] 各`validate`メソッドのJavadocにおいて、浮動小数点数がNaNあるいは±infinityだったときの扱いの記述が実態に則したものへと訂正されます ([#1237])。
 
+### Security
+
+- \[C,Java,ダウンローダー\] 現実的な攻撃シナリオは無かったと考えられますが、以下の脆弱性の影響を受けないようになります ([#1265], [#1269], [#1291], [#1295])。
+    - [RUSTSEC-2025-0023](https://rustsec.org/advisories/RUSTSEC-2025-0023)
+    - [RUSTSEC-2025-0024](https://rustsec.org/advisories/RUSTSEC-2025-0024)
+    - [RUSTSEC-2025-0055](https://rustsec.org/advisories/RUSTSEC-2025-0055)
+    - [RUSTSEC-2026-0007](https://rustsec.org/advisories/RUSTSEC-2026-0007)
+    - [RUSTSEC-2026-0009](https://rustsec.org/advisories/RUSTSEC-2026-0009)
+
 ## [0.16.3] - 2025-12-08 (+09:00)
+
+主な変更点とその解説については、[GitHub Releaseの本文](https://github.com/VOICEVOX/voicevox_core/releases/tag/0.16.3)をご覧ください。
 
 ### Added
 
@@ -92,8 +108,8 @@
     - メソッドとして`{AudioQuery,AccentPhrase,Mora}::validate`が追加されます。
 - \[Rust\] 依存ライブラリが変化します ([#1190], [#1214], [#1221])。
     - \[追加\] `bytemuck@1`: `^1.24.0`
-    - \[追加\] `pastey`: `^0.2.0`
-    - \[追加\] `phf`: `^0.13.1`
+    - \[追加\] `pastey@0.2`: `^0.2.0`
+    - \[追加\] `phf@0.13`: `^0.13.1`
 
 ### Removed
 
@@ -109,6 +125,8 @@
 - \[Java\] Javadocにおいて`UserDictWord`がGSONに対応しているという誤った情報が訂正されます ([#1223])。
 
 ## [0.16.2] - 2025-10-28 (+09:00)
+
+主な変更点とその解説については、[GitHub Releaseの本文](https://github.com/VOICEVOX/voicevox_core/releases/tag/0.16.2)をご覧ください。
 
 ### Added
 
@@ -1203,6 +1221,7 @@ Windows版ダウンローダーのビルドに失敗しています。
 [#724]: https://github.com/VOICEVOX/voicevox_core/pull/724
 [#725]: https://github.com/VOICEVOX/voicevox_core/pull/725
 [#728]: https://github.com/VOICEVOX/voicevox_core/pull/728
+[#732]: https://github.com/VOICEVOX/voicevox_core/pull/732
 [#733]: https://github.com/VOICEVOX/voicevox_core/pull/733
 [#738]: https://github.com/VOICEVOX/voicevox_core/pull/738
 [#740]: https://github.com/VOICEVOX/voicevox_core/pull/740
@@ -1255,7 +1274,9 @@ Windows版ダウンローダーのビルドに失敗しています。
 [#887]: https://github.com/VOICEVOX/voicevox_core/pull/887
 [#889]: https://github.com/VOICEVOX/voicevox_core/pull/889
 [#890]: https://github.com/VOICEVOX/voicevox_core/pull/890
+[#894]: https://github.com/VOICEVOX/voicevox_core/pull/894
 [#895]: https://github.com/VOICEVOX/voicevox_core/pull/895
+[#896]: https://github.com/VOICEVOX/voicevox_core/pull/896
 [#898]: https://github.com/VOICEVOX/voicevox_core/pull/898
 [#903]: https://github.com/VOICEVOX/voicevox_core/pull/903
 [#907]: https://github.com/VOICEVOX/voicevox_core/pull/907
@@ -1402,13 +1423,39 @@ Windows版ダウンローダーのビルドに失敗しています。
 [#1203]: https://github.com/VOICEVOX/voicevox_core/pull/1203
 [#1208]: https://github.com/VOICEVOX/voicevox_core/pull/1208
 [#1214]: https://github.com/VOICEVOX/voicevox_core/pull/1214
+[#1217]: https://github.com/VOICEVOX/voicevox_core/pull/1217
 [#1220]: https://github.com/VOICEVOX/voicevox_core/pull/1220
 [#1221]: https://github.com/VOICEVOX/voicevox_core/pull/1221
 [#1222]: https://github.com/VOICEVOX/voicevox_core/pull/1222
 [#1223]: https://github.com/VOICEVOX/voicevox_core/pull/1223
 [#1224]: https://github.com/VOICEVOX/voicevox_core/pull/1224
 [#1227]: https://github.com/VOICEVOX/voicevox_core/pull/1227
+[#1236]: https://github.com/VOICEVOX/voicevox_core/pull/1236
 [#1237]: https://github.com/VOICEVOX/voicevox_core/pull/1237
+[#1238]: https://github.com/VOICEVOX/voicevox_core/pull/1238
+[#1242]: https://github.com/VOICEVOX/voicevox_core/pull/1242
+[#1244]: https://github.com/VOICEVOX/voicevox_core/pull/1244
+[#1245]: https://github.com/VOICEVOX/voicevox_core/pull/1245
+[#1246]: https://github.com/VOICEVOX/voicevox_core/pull/1246
+[#1247]: https://github.com/VOICEVOX/voicevox_core/pull/1247
+[#1250]: https://github.com/VOICEVOX/voicevox_core/pull/1250
+[#1251]: https://github.com/VOICEVOX/voicevox_core/pull/1251
+[#1252]: https://github.com/VOICEVOX/voicevox_core/pull/1252
+[#1253]: https://github.com/VOICEVOX/voicevox_core/pull/1253
+[#1255]: https://github.com/VOICEVOX/voicevox_core/pull/1255
+[#1257]: https://github.com/VOICEVOX/voicevox_core/pull/1257
+[#1260]: https://github.com/VOICEVOX/voicevox_core/pull/1260
+[#1265]: https://github.com/VOICEVOX/voicevox_core/pull/1265
+[#1266]: https://github.com/VOICEVOX/voicevox_core/pull/1266
+[#1269]: https://github.com/VOICEVOX/voicevox_core/pull/1269
+[#1276]: https://github.com/VOICEVOX/voicevox_core/pull/1276
+[#1277]: https://github.com/VOICEVOX/voicevox_core/pull/1277
+[#1279]: https://github.com/VOICEVOX/voicevox_core/pull/1279
+[#1280]: https://github.com/VOICEVOX/voicevox_core/pull/1280
+[#1283]: https://github.com/VOICEVOX/voicevox_core/pull/1283
+[#1285]: https://github.com/VOICEVOX/voicevox_core/pull/1285
+[#1291]: https://github.com/VOICEVOX/voicevox_core/pull/1291
+[#1295]: https://github.com/VOICEVOX/voicevox_core/pull/1295
 
 [VOICEVOX/onnxruntime-builder#25]: https://github.com/VOICEVOX/onnxruntime-builder/pull/25
 

@@ -42,11 +42,13 @@
 
 use enum_map::{Enum, EnumMap};
 use macros::MoraMappings;
-use strum::{EnumCount, IntoStaticStr};
+use strum::{EnumCount, EnumString, IntoStaticStr};
 
-use super::acoustic_feature_extractor::{MoraTail, OptionalConsonant};
+use super::acoustic_feature_extractor::{NonPauBaseVowel, OptionalConsonant};
 
-#[derive(Clone, Copy, PartialEq, Debug, Enum, EnumCount, IntoStaticStr, MoraMappings)]
+#[derive(
+    Clone, Copy, PartialEq, Debug, Enum, EnumCount, EnumString, IntoStaticStr, MoraMappings,
+)]
 #[mora_mappings(
     mora_phonemes_to_mora_kana {
         pub(super) static MORA_PHONEMES_TO_MORA_KANA: phf::Map<&str, MoraKana> = _;
@@ -54,7 +56,7 @@ use super::acoustic_feature_extractor::{MoraTail, OptionalConsonant};
     mora_kana_to_mora_phonemes {
         pub(super) static MORA_KANA_TO_MORA_PHONEMES: EnumMap<
             MoraKana,
-            (OptionalConsonant, MoraTail),
+            (OptionalConsonant, NonPauBaseVowel),
         > = _;
     }
 )]

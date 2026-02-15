@@ -5,7 +5,6 @@ use std::{
 };
 
 use duplicate::duplicate_item;
-use serde::de::DeserializeOwned;
 use tracing::warn;
 
 use crate::error::{InvalidQueryError, InvalidQueryErrorSource};
@@ -14,17 +13,18 @@ use super::{
     super::super::{
         acoustic_feature_extractor::{Consonant, NonConsonant},
         sampling_rate::SamplingRate,
+        validate::Validate as _,
         DEFAULT_SAMPLING_RATE,
     },
     AccentPhrase, AudioQuery, Mora,
 };
 
 impl Mora {
-    /// この構造体をバリデートする。
+    /// この構造体が不正であるときエラーを返す。
     ///
     /// # Errors
     ///
-    /// 次のうちどれかを満たすなら[`ErrorKind::InvalidQuery`]を表わすエラーを返す。
+    /// この構造体が不正であるとき[`ErrorKind::InvalidQuery`]を表わすエラーを返す。不正であるとは、以下のいずれかの条件を満たすことである。
     ///
     /// - [`consonant`]と[`consonant_length`]の有無が不一致。
     /// - [`consonant`]が子音以外の音素であるか、もしくは[`Phoneme`]として不正。
@@ -58,11 +58,11 @@ impl Mora {
 }
 
 impl AccentPhrase {
-    /// この構造体をバリデートする。
+    /// この構造体が不正であるときエラーを返す。
     ///
     /// # Errors
     ///
-    /// 次のうちどれかを満たすなら[`ErrorKind::InvalidQuery`]を表わすエラーを返す。
+    /// この構造体が不正であるとき[`ErrorKind::InvalidQuery`]を表わすエラーを返す。不正であるとは、以下のいずれかの条件を満たすことである。
     ///
     /// - [`moras`]もしくは[`pause_mora`]の要素のうちいずれかが[不正]。
     /// - [`accent`]が`0`。
@@ -92,11 +92,11 @@ impl AccentPhrase {
 }
 
 impl AudioQuery {
-    /// この構造体をバリデートする。
+    /// この構造体が不正であるときエラーを返す。
     ///
     /// # Errors
     ///
-    /// 次のうちどれかを満たすなら[`ErrorKind::InvalidQuery`]を表わすエラーを返す。
+    /// この構造体が不正であるとき[`ErrorKind::InvalidQuery`]を表わすエラーを返す。不正であるとは、以下のいずれかの条件を満たすことである。
     ///
     /// - [`accent_phrases`]の要素のうちいずれかが[不正]。
     /// - [`output_sampling_rate`]が`24000`の倍数ではない、もしくは`0` (将来的に解消予定。cf. [#762])。
@@ -132,30 +132,6 @@ impl AudioQuery {
     // TODO: この層を破壊
     pub(crate) fn to_validated(&self) -> crate::Result<ValidatedAudioQuery<'_>> {
         ValidatedAudioQuery::new(self).map_err(Into::into)
-    }
-}
-
-pub trait Validate: DeserializeOwned {
-    const NAME: &str;
-    fn validate(&self) -> crate::Result<()>;
-
-    fn validation_error_description() -> String {
-        format!("不正な{}です", Self::NAME)
-    }
-}
-
-#[duplicate_item(
-    T S validation;
-    [ AudioQuery ] [ "AudioQuery" ] [ Self::validate ];
-    [ AccentPhrase ] [ "アクセント句" ] [ Self::validate ];
-    [ Mora ] [ "モーラ" ] [ Self::validate ];
-    [ Vec<AccentPhrase> ] [ "アクセント句の列" ] [ |this: &Self| this.iter().try_for_each(AccentPhrase::validate) ];
-)]
-impl Validate for T {
-    const NAME: &str = S;
-
-    fn validate(&self) -> crate::Result<()> {
-        (validation)(self)
     }
 }
 

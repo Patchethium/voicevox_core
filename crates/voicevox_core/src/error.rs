@@ -1,6 +1,7 @@
 use crate::{
     core::devices::DeviceAvailabilities,
     engine::{
+        song::queries::Key,
         talk::{user_dict::InvalidWordError, KanaParseError},
         DEFAULT_SAMPLING_RATE,
     },
@@ -60,6 +61,7 @@ impl Error {
             ErrorRepr::UseUserDict(_) => ErrorKind::UseUserDict,
             ErrorRepr::InvalidWord(_) => ErrorKind::InvalidWord,
             ErrorRepr::InvalidQuery { .. } => ErrorKind::InvalidQuery,
+            ErrorRepr::IncompatibleQueries(_) => ErrorKind::IncompatibleQueries,
         }
     }
 }
@@ -101,8 +103,15 @@ pub(crate) enum ErrorRepr {
     )]
     ModelNotFound { model_id: VoiceModelId },
 
-    #[error("正常に推論することができませんでした")]
-    RunModel(#[source] anyhow::Error),
+    #[error(
+        "正常に推論することができませんでした{}",
+        note.as_ref().map(|s| format!("。NOTE: {s}")).unwrap_or_default()
+    )]
+    RunModel {
+        note: Option<&'static str>,
+        #[source]
+        source: anyhow::Error,
+    },
 
     #[error("入力テキストの解析に失敗しました")]
     AnalyzeText {
@@ -131,6 +140,9 @@ pub(crate) enum ErrorRepr {
 
     #[error(transparent)]
     InvalidQuery(#[from] InvalidQueryError),
+
+    #[error(transparent)]
+    IncompatibleQueries(IncompatibleQueriesError),
 }
 
 /// エラーの種類。
@@ -182,9 +194,19 @@ pub enum ErrorKind {
     UseUserDict,
     /// ユーザー辞書の単語のバリデーションに失敗した。
     InvalidWord,
-    /// AudioQuery、もしくはその一部が不正。
+    /// [`AudioQuery`]、[`FrameAudioQuery`]、[`Score`]、もしくはその一部が不正。
+    ///
+    /// [`AudioQuery`]: crate::AudioQuery
+    /// [`FrameAudioQuery`]: crate::FrameAudioQuery
+    /// [`Score`]: crate::Score
     InvalidQuery,
-    // IDK why but removing this doc pleasures specta
+    /// [`FrameAudioQuery`]と[`Score`]の組み合わせが不正。
+    ///
+    /// [`FrameAudioQuery`]: crate::FrameAudioQuery
+    /// [`Score`]: crate::Score
+    IncompatibleQueries,
+    // Different from main, #[doc(hidden)] will break specta
+    // we simply comment it out
     // #[doc(hidden)]
     __NonExhaustive,
 }
@@ -258,6 +280,21 @@ pub(crate) enum InvalidQueryErrorSource {
     #[error("0より大きい{DEFAULT_SAMPLING_RATE}の倍数でなければなりません")]
     IsNotMultipleOfBaseSamplingRate,
 
+    #[error("lyricが空文字列の場合、keyはnullである必要があります。")]
+    UnnecessaryKeyForPau,
+
+    #[error("keyがnullの場合、lyricは空文字列である必要があります。")]
+    MissingKeyForNonPau,
+
+    #[error("{}以上{}以下である必要があります", Key::MIN, Key::MAX)]
+    OutOfRangeKeyValue,
+
+    #[error("{_0}")]
+    NotInteger(serde_json::Error),
+
+    #[error(r#"notesはpau (lyric="")から始まる必要があります"#)]
+    InitialNoteMustBePau,
+
     #[error(transparent)]
     InvalidAsSuperset(Box<InvalidQueryError>),
 
@@ -267,4 +304,14 @@ pub(crate) enum InvalidQueryErrorSource {
         #[source]
         source: Box<InvalidQueryError>,
     },
+}
+
+#[derive(Clone, Copy, Error, Debug)]
+#[error("不正な楽譜とFrameAudioQueryの組み合わせです。異なる音素ID列です")]
+pub(crate) struct IncompatibleQueriesError;
+
+impl From<IncompatibleQueriesError> for Error {
+    fn from(err: IncompatibleQueriesError) -> Self {
+        ErrorRepr::IncompatibleQueries(err).into()
+    }
 }

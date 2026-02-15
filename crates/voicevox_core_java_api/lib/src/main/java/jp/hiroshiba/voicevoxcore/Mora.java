@@ -9,8 +9,15 @@ import jp.hiroshiba.voicevoxcore.exceptions.InvalidQueryException;
 /**
  * モーラ（子音＋母音）ごとの情報。
  *
- * <p>この構造体の状態によっては、{@code Synthesizer}の各メソッドは{@link InvalidQueryException}を発する。詳細は{@link
- * #validate}にて。
+ * <p>このクラスは不正な状態を表現しうる。どのような状態が不正なのかについては{@link #validate}を参照。このクラスを使う関数は、不正な状態に対して{@link
+ * InvalidQueryException}をスローする。
+ *
+ * <p>コンストラクト時には、不正な状態であるかの検証は行われない。外部からのデータが不正でないことを確かめるには、コンストラクト後に{@code validate()}を用いる必要がある。
+ *
+ * <pre>{@code
+ * Mora mora = (new Gson()).fromJson(json, Mora.class);
+ * mora.validate();
+ * }</pre>
  *
  * <p>Gsonにおいてはフィールド名はsnake_caseとなる。<a
  * href="https://github.com/VOICEVOX/voicevox_core/blob/main/docs/guide/user/serialization.md"
@@ -65,21 +72,9 @@ public class Mora implements Cloneable {
   }
 
   /**
-   * このインスタンスをバリデートする。
+   * このインスタンスが不正であるときエラーを返す。
    *
-   * <p>次のうちどれかを満たすなら{@link InvalidQueryException}を発する。
-   *
-   * <ul>
-   *   <li>JSONへのシリアライズが不可。
-   *       <ul>
-   *         <li>{@link #consonantLength}がNaN、infinity、もしくは負。
-   *         <li>{@link #vowelLength}がNaN、infinity、もしくは負。
-   *         <li>{@link #pitch}がNaNもしくは±infinity。
-   *       </ul>
-   *   <li>{@link #consonant}と{@link #consonantLength}の有無が不一致。
-   *   <li>{@link #consonant}が子音以外の音素であるか、もしくは音素として不正。
-   *   <li>{@link #vowel}が子音であるか、もしくは音素として不正。
-   * </ul>
+   * <p>不正であるとは、{@code @throws}で示す条件を満たすことである。
    *
    * <p>また次の状態に対してはログで警告を出す。将来的にはエラーになる予定。
    *
@@ -87,6 +82,19 @@ public class Mora implements Cloneable {
    *   <li>{@link #consonantLength}が負。
    *   <li>{@link #vowelLength}が負。
    * </ul>
+   *
+   * @throws InvalidQueryException 次のうちどれかを満たす場合
+   *     <ul>
+   *       <li>JSONへのシリアライズが不可。
+   *           <ul>
+   *             <li>{@link #consonantLength}がNaN、infinity、もしくは負。
+   *             <li>{@link #vowelLength}がNaN、infinity、もしくは負。
+   *             <li>{@link #pitch}がNaNもしくは±infinity。
+   *           </ul>
+   *       <li>{@link #consonant}と{@link #consonantLength}の有無が不一致。
+   *       <li>{@link #consonant}が子音以外の音素であるか、もしくは音素として不正。
+   *       <li>{@link #vowel}が子音であるか、もしくは音素として不正。
+   *     </ul>
    */
   public void validate() {
     rsValidate();

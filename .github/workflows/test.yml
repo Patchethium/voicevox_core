@@ -2,7 +2,17 @@ name: test workflow
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+    paths:
+      - .cargo/config.toml
+      - .github/**
+      - Cargo.*
+      - crates/**
+      - example/**
+      - model/**
+      - rust-toolchain
   workflow_dispatch:
 
 env:
@@ -95,17 +105,21 @@ jobs:
       - run: cargo clippy -v -p voicevox_core -p voicevox_core_c_api --features link-onnxruntime -- -D clippy::all -D warnings --no-deps
       - name: Do `cargo check` the Rust API with its MSRV
         run: |
-          rust_api=$(realpath ./crates/voicevox_core)
+          # TODO: MSRVが1.85以上になれば、このようなことをせずともワークスペース上で直接`cargo check`できる
+          lockfile=$(realpath ./Cargo.lock)
+          rust_api=$(cygpath -wa ./crates/voicevox_core)
           mkdir /tmp/use-rust-api
           cd "$_"
           rustup override set ${{ steps.msrv-for-rust-api.outputs.rust-version }}
           cargo init
-          cargo add base64ct@=1.6.0 # TODO: MSRVが1.85以上になったら不要
-          cargo add jlabel@=0.1.4 # TODO: 〃
-          cargo add --path "$rust_api" --features load-onnxruntime
+          cp "$lockfile" ./Cargo.lock
+          {
+            printf "voicevox_core = { path = '%s', features = ['load-onnxruntime'] }\n" "$rust_api"
+            echo 'base64ct = "=1.6.0"'
+            echo 'time = "=0.3.45"'
+          } >> ./Cargo.toml
           cargo check
-          cargo rm voicevox_core
-          cargo add --path "$rust_api" --features link-onnxruntime
+          sed -i 's/load-onnxruntime/link-onnxruntime/' ./Cargo.toml
           cargo check
       - run: cargo fmt -- --check
 
@@ -327,7 +341,7 @@ jobs:
         run: poetry run pytest ./python/test/
       - name: Exampleを実行
         run: |
-          for file in ../../example/python/run{,-asyncio}.py; do
+          for file in ../../example/python/{talk,song}{,-asyncio}.py; do
             poetry run python "$file" ../test_util/data/model/sample.vvm --dict-dir ../test_util/data/open_jtalk_dic_utf_8-1.11 --onnxruntime ../test_util/data/lib/*onnxruntime*
           done
   build-and-test-java-api:
