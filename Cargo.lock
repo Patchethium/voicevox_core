@@ -4273,7 +4273,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab7f01e9310a820edd31c80fde3cae445295adde21a3f9416517d7d65015b971"
 dependencies = [
  "specta-macros",
- "thiserror",
+ "thiserror 1.0.64",
  "uuid",
 ]
 
@@ -4296,7 +4296,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77216504061374659e7245eac53d30c7b3e5fe64b88da97c753e7184b0781e63"
 dependencies = [
  "specta",
- "thiserror",
+ "thiserror 1.0.64",
 ]
 
 [[package]]
@@ -4307,20 +4307,8 @@ checksum = "3220a0c365e51e248ac98eab5a6a32f544ff6f961906f09d3ee10903a4f52b2d"
 dependencies = [
  "specta",
  "specta-serde",
- "thiserror",
+ "thiserror 1.0.64",
 ]
-
-[[package]]
-name = "spin"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
-
-[[package]]
-name = "spin"
-version = "0.9.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 
 [[package]]
 name = "stable_deref_trait"
@@ -5260,9 +5248,9 @@ dependencies = [
  "serde_json",
  "serde_with",
  "smallvec 1.13.2",
+ "smol_str",
  "specta",
  "specta-typescript",
- "smol_str",
  "strum",
  "tempfile",
  "test_util",
