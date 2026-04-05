@@ -1,10 +1,10 @@
 # 処理の流れ
 # 1. create_draft_release: タグなしでdraft releaseを先に作成
-# 2. build_and_deploy等: 各成果物をdraft releaseにアップロード
-# 3. prerelease: 全ビルド成功後に初めてタグを作成し、draftをprereleaseに変更
-#    この段階で失敗した場合、手動でリリース作業を続行する。
+# 2. build等: 各成果物をdraft releaseにアップロード
+# 3. set_tag_name: draft releaseに`tag_name`を設定
+# 4. download_test: draft releaseにアップロードしたダウンローダーとC APIバイナリに対してテスト
 
-name: build and deploy workflow
+name: build workflow
 
 on:
   workflow_dispatch:
@@ -30,12 +30,6 @@ on:
     branches:
       - main
 
-env:
-  # workflow_dispatchでのバージョン名か、'0.0.0'が入る
-  VERSION: ${{ inputs.version || '0.0.0' }}
-  # 簡易テストとするかどうか。mainブランチ、workflow_dispatch以外は簡易テストとする
-  IS_SIMPLE_TEST: ${{ github.ref != 'refs/heads/main' && github.event_name != 'workflow_dispatch' }}
-
 defaults:
   run:
     shell: bash
@@ -52,12 +46,27 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       includes: ${{ steps.strategy_matrix.outputs.includes }}
-      deploy: ${{ env.VERSION != '0.0.0' }}
-      version: ${{ env.VERSION }}
+
+      # - draft-release: draft releaseを作り、ビルド成果物をそこにアップロードする。
+      # - simple-test: 簡易テスト。mainブランチ、workflow_dispatch以外は簡易テストとする。
+      # - full-test
+      mode: ${{ steps.strategy_matrix.outputs.mode }}
+
+      # workflow_dispatchでのバージョン名か、'0.0.0'が入る。
+      version: ${{ steps.strategy_matrix.outputs.version }}
     steps:
       - name: declare strategy matrix
         id: strategy_matrix
         run: |
+          mode=${{
+            case(
+              !!inputs.version && inputs.version != '0.0.0', 'draft-release',
+              github.ref != 'refs/heads/main' && github.event_name != 'workflow_dispatch', 'simple-test',
+              'full-test'
+            )
+          }}
+          version=${{ inputs.version || '0.0.0' }}
+
           includes='[
             {
               "os": "windows-2022",
@@ -161,39 +170,46 @@ jobs:
           ]'
 
           # FIXME: composite action に切り出す
-          if ${{ env.IS_SIMPLE_TEST }}; then
+          if [ $mode = simple-test ]; then
             includes=$(echo "$includes" | jq -c '[.[] | select(.can_skip_in_simple_test == false)]')
           fi
           includes=$(echo "$includes" | jq -c '[.[] | del(.can_skip_in_simple_test)]')
-          echo "includes=${includes}" >> "$GITHUB_OUTPUT"
+
+          cat >> "$GITHUB_OUTPUT" <<EOF
+          includes=$includes
+          mode=$mode
+          version=$version
+          EOF
 
   create_draft_release:
     needs: config
     runs-on: ubuntu-latest
     outputs:
-      # `deploy`がtrueなら、GitHub REST APIの`Release`オブジェクトの一部。falseならnull。
+      # `draft-release`がtrueなら、GitHub REST APIの`Release`オブジェクトの一部。falseならnull。
       release: ${{ steps.create-draft-release.outputs.release || 'null' }}
     steps:
       - name: Confirm that the tag does not exist at the moment
         run: |
+          tag=${{ needs.config.outputs.version }}
           exists=$(
             gh api \
-              "/repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$VERSION" \
+              "/repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag" \
               -H 'Accept: application/vnd.github+json' \
               -H 'X-GitHub-Api-Version: 2022-11-28' \
-              -q '[.] | flatten | any(.ref == "refs/tags/'"$VERSION"'")'
+              -q '[.] | flatten | any(.ref == "refs/tags/'$tag'")'
           )
           if [ "$exists" = true ]; then
-            echo "::error title=create_draft_release::'refs/tags/$VERSION' already exists"
+            echo "::error title=create_draft_release::'refs/tags/$tag' already exists"
             exit 1
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create a draft release without real tag
-        if: fromJson(needs.config.outputs.deploy)
+        if: needs.config.outputs.mode == 'draft-release'
         id: create-draft-release
         run: |
+          name=${{ needs.config.outputs.version }}
           release=$(
             gh api \
               "/repos/$GITHUB_REPOSITORY/releases" \
@@ -202,7 +218,7 @@ jobs:
               -H 'X-GitHub-Api-Version: 2022-11-28' \
               -f tag_name= \
               -f "target_commitish=$GITHUB_SHA" \
-              -f "name=$VERSION" \
+              -f name=$name \
               -F draft=true \
               -q '{ upload_url, id }'
           )
@@ -210,7 +226,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build_and_deploy:
+  build:
     needs: [config, create_draft_release]
     environment: ${{ inputs.code_signing && 'code_signing' || '' }} # コード署名用のenvironment
     strategy:
@@ -262,9 +278,10 @@ jobs:
         run: cargo binstall cargo-edit@^0.11 --no-confirm --log-level debug
       - name: set cargo version
         run: |
-          cargo set-version "$VERSION" --exclude voicevox_core_python_api --exclude xtask
+          version=${{ needs.config.outputs.version }}
+          cargo set-version $version --exclude voicevox_core_python_api --exclude xtask
           if ${{ matrix.python_whl }}; then
-            sed -i_ 's/version = "\(0\.0\.0\)"/version = "'"$VERSION"'"/' ./crates/voicevox_core_python_api/pyproject.toml
+            sed -i_ 's/version = "\(0\.0\.0\)"/version = "'$version'"/' ./crates/voicevox_core_python_api/pyproject.toml
           fi
       - name: cache target
         uses: Swatinem/rust-cache@v2
@@ -272,10 +289,14 @@ jobs:
         shell: bash
         run: |
           case ${{ matrix.c_release_format }} in
-            plain-cdylib) linking=load-onnxruntime ;;
-            ios-xcframework) linking=link-onnxruntime ;;
+            plain-cdylib)
+              export VVCORE_BUILD_DOWNLOAD_AND_COPY_ORT=0
+              features=load-onnxruntime ;;
+            ios-xcframework)
+              export VVCORE_BUILD_DOWNLOAD_AND_COPY_ORT=1
+              features=voicevox_core/buildtime-download-onnxruntime,link-onnxruntime ;;
           esac
-          cargo build -p voicevox_core_c_api -v --features "$linking" --target ${{ matrix.target }} --profile c-api
+          cargo build -p voicevox_core_c_api -v --features "$features" --target ${{ matrix.target }} --profile c-api
       - name: build voicevox_core_python_api
         if: matrix.python_whl
         id: build-voicevox-core-python-api
@@ -286,9 +307,13 @@ jobs:
           (cd crates/voicevox_core_python_api && poetry install --with dev)
           maturin build --manifest-path ./crates/voicevox_core_python_api/Cargo.toml --target ${{ matrix.target }} --release
           echo "whl=$(find ./target/wheels -type f)" >> "$GITHUB_OUTPUT"
+        env:
+          VVCORE_BUILD_DOWNLOAD_AND_COPY_ORT: '0'
       - name: build voicevox_core_java_api
         if: ${{ matrix.java }}
         run: cargo build -p voicevox_core_java_api -vv --target ${{ matrix.target }} --release
+        env:
+          VVCORE_BUILD_DOWNLOAD_AND_COPY_ORT: '0'
       - name: Organize artifact
         run: |
           mkdir -p artifact/${{ env.ASSET_NAME }}/{include,lib}
@@ -302,17 +327,23 @@ jobs:
           cp -v target/${{ matrix.target }}/c-api/voicevox_core.dll.lib "artifact/${{ env.ASSET_NAME }}/lib/voicevox_core.lib" || true
           cp -v README.md "artifact/${{ env.ASSET_NAME }}/README.txt"
           cp -v LICENSE "artifact/${{ env.ASSET_NAME }}/"
-          echo "${{ env.VERSION }}" > "artifact/${{ env.ASSET_NAME }}/VERSION"
+          echo ${{ needs.config.outputs.version }} > "artifact/${{ env.ASSET_NAME }}/VERSION"
 
           mkdir java_artifact
           cp -v target/${{ matrix.target }}/release/*voicevox_core_java_api.{dll,so,dylib} "java_artifact" || true
       - name: Code signing (Windows)
         if: startsWith(matrix.os, 'windows') && inputs.code_signing
-        run: bash build_util/codesign.bash "artifact/${{ env.ASSET_NAME }}/lib/voicevox_core.dll"
+        run: bash build_util/codesign_windows.bash "artifact/${{ env.ASSET_NAME }}/lib/voicevox_core.dll"
         env:
           ESIGNERCKA_USERNAME: ${{ secrets.ESIGNERCKA_USERNAME }}
           ESIGNERCKA_PASSWORD: ${{ secrets.ESIGNERCKA_PASSWORD }}
           ESIGNERCKA_TOTP_SECRET: ${{ secrets.ESIGNERCKA_TOTP_SECRET }}
+      - name: Code signing (macOS)
+        if: contains(matrix.target, '-apple-darwin') && inputs.code_signing
+        run: bash build_util/codesign_macos.bash "artifact/${{ env.ASSET_NAME }}/lib/*voicevox_core.dylib"
+        env:
+          APPLE_P12_BASE64: ${{ secrets.APPLE_P12_BASE64 }}
+          APPLE_P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
       - name: Upload artifact to build XCFramework
         if: matrix.c_release_format == 'ios-xcframework'
         uses: actions/upload-artifact@v4
@@ -324,13 +355,13 @@ jobs:
           cd artifact
           7z a "../${{ env.ASSET_NAME }}.zip" "${{ env.ASSET_NAME }}"
       - name: Upload to Release
-        if: fromJson(needs.config.outputs.deploy) && matrix.c_release_format == 'plain-cdylib'
+        if: needs.config.outputs.mode == 'draft-release' && matrix.c_release_format == 'plain-cdylib'
         uses: ./.github/actions/upload-gh-release-assets
         with:
           upload-url: ${{ fromJson(needs.create_draft_release.outputs.release).upload_url }}
           files: ${{ env.ASSET_NAME }}.zip
       - name: Upload Python whl to Release
-        if: fromJson(needs.config.outputs.deploy) && matrix.python_whl
+        if: needs.config.outputs.mode == 'draft-release' && matrix.python_whl
         uses: ./.github/actions/upload-gh-release-assets
         with:
           upload-url: ${{ fromJson(needs.create_draft_release.outputs.release).upload_url }}
@@ -343,8 +374,8 @@ jobs:
           path: java_artifact
 
   build_xcframework:
-    if: ${{ !(github.ref != 'refs/heads/main' && github.event_name != 'workflow_dispatch') }} # !env.IS_SIMPLE_TEST と同じ
-    needs: [config, create_draft_release, build_and_deploy]
+    if: ${{ needs.config.outputs.mode == 'draft-release' || needs.config.outputs.mode == 'full-test' }}
+    needs: [config, create_draft_release, build]
     runs-on: macos-14
     env:
       IOS_X86_64_PATH: artifact/voicevox_core-x86_64-apple-ios
@@ -377,7 +408,7 @@ jobs:
           cd ${{ steps.create-xcframework.outputs.output_asset_path }}
           7z a "../../${{ env.ASSET_NAME }}.zip" "voicevox_core.xcframework"
       - name: Upload to Release
-        if: fromJson(needs.config.outputs.deploy)
+        if: needs.config.outputs.mode == 'draft-release'
         uses: ./.github/actions/upload-gh-release-assets
         with:
           upload-url: ${{ fromJson(needs.create_draft_release.outputs.release).upload_url }}
@@ -385,8 +416,8 @@ jobs:
 
   build_java_package:
     runs-on: ubuntu-latest
-    if: ${{ !(github.ref != 'refs/heads/main' && github.event_name != 'workflow_dispatch') }} # !env.IS_SIMPLE_TEST と同じ
-    needs: [config, create_draft_release, build_and_deploy]
+    if: ${{ needs.config.outputs.mode == 'draft-release' || needs.config.outputs.mode == 'full-test' }}
+    needs: [config, create_draft_release, build]
     steps:
       - uses: actions/checkout@v5
       - name: Set up Rust
@@ -401,7 +432,7 @@ jobs:
       - name: Install cargo-edit
         run: cargo binstall cargo-edit@^0.11 --no-confirm
       - name: set cargo version
-        run: cargo set-version "$VERSION" -p voicevox_core_java_api
+        run: cargo set-version ${{ needs.config.outputs.version }} -p voicevox_core_java_api
 
       - name: "Download artifact"
         uses: actions/download-artifact@v5
@@ -464,29 +495,30 @@ jobs:
           zip -r /tmp/java_packages.zip .
 
       - name: Upload to Release
-        if: fromJson(needs.config.outputs.deploy)
+        if: needs.config.outputs.mode == 'draft-release'
         uses: ./.github/actions/upload-gh-release-assets
         with:
           upload-url: ${{ fromJson(needs.create_draft_release.outputs.release).upload_url }}
           files: /tmp/java_packages.zip
 
-  build_and_deploy_downloader:
+  build_downloader:
     needs: [config, create_draft_release]
-    if: fromJson(needs.config.outputs.deploy)
-    uses: ./.github/workflows/build_and_deploy_downloader.yml
+    if: needs.config.outputs.mode == 'draft-release'
+    uses: ./.github/workflows/build-downloader.yml
     with:
       upload_url: ${{ fromJson(needs.create_draft_release.outputs.release).upload_url }}
       version: ${{ needs.config.outputs.version }}
       code_signing: ${{ inputs.code_signing }}
+    secrets: inherit
 
-  prerelease:
-    needs: [config, create_draft_release, build_and_deploy, build_xcframework, build_java_package, build_and_deploy_downloader]
-    if: fromJson(needs.config.outputs.deploy)
+  set_tag_name:
+    needs: [config, create_draft_release, build, build_xcframework, build_java_package, build_downloader]
+    if: needs.config.outputs.mode == 'draft-release'
     runs-on: ubuntu-latest
     steps:
       - name: Set the tag name
         run: |
-          tag=$VERSION
+          tag=${{ needs.config.outputs.version }}
           release_id=${{ fromJson(needs.create_draft_release.outputs.release).id }}
 
           # 挙動が安定しないようなので、５回まで連続で試行する。それでも駄目なら手動でリリース作業を続行。
@@ -509,39 +541,14 @@ jobs:
             sleep 1
           done
 
-          echo "::error title=prerelease::Could not set 'tag_name'. Please proceed the release process manually"
+          echo "::error title=set_tag_name::Could not set 'tag_name'. Please set manually"
           exit 1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create the tag
-        run: |
-          tag=$VERSION
-          gh api \
-            "/repos/$GITHUB_REPOSITORY/git/refs" \
-            --method POST \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2022-11-28' \
-            -f "ref=refs/tags/$tag" \
-            -f "sha=$GITHUB_SHA"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Prerelease
-        run: |
-          gh api \
-            "/repos/$GITHUB_REPOSITORY/releases/${{ fromJson(needs.create_draft_release.outputs.release).id }}" \
-            --method PATCH \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2022-11-28' \
-            -F draft=false \
-            -F prerelease=true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   download_test:
-    needs: [config, create_draft_release, prerelease]
-    if: fromJson(needs.config.outputs.deploy)
+    needs: [config, set_tag_name]
+    if: needs.config.outputs.mode == 'draft-release'
     uses: ./.github/workflows/download_test.yml
     with:
       version: ${{ inputs.version }}

@@ -33,11 +33,13 @@
 - fix compat breaking: revive workaround padding in decode() ([#867])
 - feat!: `render`の引数の範囲指定部分を各言語の慣習に合わせる ([#879])
 - feat!: decode.onnxを復活させる ([#918])
+- [#1319]
 
 [#854]: https://github.com/VOICEVOX/voicevox_core/pull/854
 [#864]: https://github.com/VOICEVOX/voicevox_core/pull/864
 [#867]: https://github.com/VOICEVOX/voicevox_core/pull/867
 [#879]: https://github.com/VOICEVOX/voicevox_core/pull/879
+[#1319]: https://github.com/VOICEVOX/voicevox_core/pull/1319
 
 ### もし`TextAnalyzer`機能を充実させた場合
 
@@ -53,7 +55,38 @@
 
 ### Added
 
-- ソング機能が追加されます ([#531], [#732], [#738], [#761], [#895], [#896], [#894], [#1217], [#1236], [#1073], [#1242], [#1250], [#1252], [#1247], [#1253], [#1244], [#1257], [#1255], [#1260], [#1245], [#1246], [#1280], [#1285], [#1279])。
+- \[Rust\] `Synthesizer::load_voice_model`にオプション`on_existing`が追加されます ([#1331])。
+- \[ダウンローダー\] `--os`オプションで`android`と`ios`を指定できるようになります。ただしiOSの`c-api`をダウンロードすることはできません ([#1313])。
+- \[ダウンローダー\] 環境変数`VV_DOWNLOADER_C_API_ALLOW_DRAFT`を設定することで、`c-api`のdraft releaseを`--c-api-version`で指定できるようになります。主な用途はこのvoicevox\_coreリポジトリでの内部利用です ([#1315])。
+
+### Changed
+
+- \[Rust\] \[BREAKING\] `Synthesizer::load_voice_model`がビルダースタイルになります ([#1331])。
+- \[Rust\] \[BREAKING\] MSRVが1.89.0になります ([#1323])。
+- \[Rust\] \[BREAKING\] `load-onnxruntime`フィーチャと`link-onnxruntime`フィーチャの両方において、ビルド時のダウンロードおよびリンカーフラグの設定が[pykeio/ort](https://github.com/pykeio/ort)由来の処理に依存しなくなります。それにより、ビルド時の挙動が以下の点で変わります。なお以下で言及する"ONNX Runtime"はVOICEVOX ONNX Runtimeとは異なることに注意してください [#1278]。
+    - ビルド時のONNX Runtimeのダウンロードおよび[ターゲットディレクトリ](https://doc.rust-lang.org/cargo/reference/config.html#buildtarget-dir)への配置が、デフォルトでは行われなくなります。新しく追加される`buildtime-download-onnxruntime`フィーチャを有効化**した上で**環境変数`VVCORE_BUILD_DOWNLOAD_AND_COPY_ORT`を`1`にすることで、これまで通りダウンロードおよびターゲットディレクトリへの配置が行われます。
+    - ONNX Runtimeのダウンロード先が`{キャッシュディレクトリ}/voicevox_ort/dfbin/`から`{ターゲットディレクトリ}/voicevox_core/downloads/onnxruntime/`になります。
+    - Windows上ではシンボリックリンクの作成を試みなくなります。
+    - `load-onnxruntime`での不必要なpkg-configやライブラリリンクが行われなくなります。
+    - `link-onnxruntime`におけるpkg-configが、Windowsでは`onnxruntime`を対象にするようになります。これまではWindowsであっても`libonnxruntime`を対象にしていました。
+    - `link-onnxruntime`が有効化されていて上述のダウンロードが行われない場合、pkg-configを試みて失敗したら警告を出すようになります。Cargoプロジェクト外でONNX Runtimeを管理するのでなければダウンロードを検討してください。
+    - 以前まで使えていた、pykeio/ortに作用する環境変数が使えなくなります。
+    - 以前までは`voicevox-ort/{cuda,directml}`フィーチャによりEP付きのONNX Runtimeがダウンロードできていましたが、今後はできなくなります。
+- \[Rust\] `Onnxruntime`型のメモリアドレスの所在が`voicevox_core`側になります ([#1278])。
+- \[Rust\] 依存ライブラリが変化します ([#1278])。
+    - \[削除\]: `ndarray@0.16`
+    - \[削除\]: `git+https://github.com/VOICEVOX/ort.git?rev=6d69dbd1ddfae713081d844c456be5b8d097e17e#voicevox-ort@2.0.0-rc.10`
+    - \[追加\]: `ndarray@0.17`
+    - \[追加\]: `git+https://github.com/pykeio/ort.git?rev=94417081c47f47f5a7d6a92ce94bb38fda10019f#ort@2.0.0-rc.12`
+    - \[変更\]: `indexmap@2`: `^2.6.0` → `^2.13.0`
+
+## [0.16.4] - 2026-02-19 (+09:00)
+
+主な変更点とその解説については、[GitHub Releaseの本文](https://github.com/VOICEVOX/voicevox_core/releases/tag/0.16.4)をご覧ください。
+
+### Added
+
+- ソング機能が追加されます ([#531], [#732], [#738], [#761], [#895], [#896], [#894], [#1217], [#1236], [#1073], [#1242], [#1250], [#1252], [#1247], [#1253], [#1244], [#1257], [#1255], [#1260], [#1245], [#1246], [#1280], [#1285], [#1279], [#1304])。
 - ドキュメントが改善されます。
     - [バージョン0.16.3](#0163---2025-12-08-0900)で導入された、`AudioQuery`/`AccentPhrase`/`Mora`のバリデーション機能に関するドキュメンテーションがよりわかりやすくなります ([#1251])。
     - \[Python,Java\] 一部のドキュメントの文体が改善されます ([#1238])。
@@ -1057,7 +1090,8 @@ Windows版ダウンローダーのビルドに失敗しています。
 
 - \[Python\] モジュールに`__all__`が適切に設定されます ([#415])。
 
-[Unreleased]: https://github.com/VOICEVOX/voicevox_core/compare/0.16.3...HEAD
+[Unreleased]: https://github.com/VOICEVOX/voicevox_core/compare/0.16.4...HEAD
+[0.16.4]: https://github.com/VOICEVOX/voicevox_core/compare/0.16.3...0.16.4
 [0.16.3]: https://github.com/VOICEVOX/voicevox_core/compare/0.16.2...0.16.3
 [0.16.2]: https://github.com/VOICEVOX/voicevox_core/compare/0.16.1...0.16.2
 [0.16.1]: https://github.com/VOICEVOX/voicevox_core/compare/0.16.0...0.16.1
@@ -1450,12 +1484,18 @@ Windows版ダウンローダーのビルドに失敗しています。
 [#1269]: https://github.com/VOICEVOX/voicevox_core/pull/1269
 [#1276]: https://github.com/VOICEVOX/voicevox_core/pull/1276
 [#1277]: https://github.com/VOICEVOX/voicevox_core/pull/1277
+[#1278]: https://github.com/VOICEVOX/voicevox_core/pull/1278
 [#1279]: https://github.com/VOICEVOX/voicevox_core/pull/1279
 [#1280]: https://github.com/VOICEVOX/voicevox_core/pull/1280
 [#1283]: https://github.com/VOICEVOX/voicevox_core/pull/1283
 [#1285]: https://github.com/VOICEVOX/voicevox_core/pull/1285
 [#1291]: https://github.com/VOICEVOX/voicevox_core/pull/1291
 [#1295]: https://github.com/VOICEVOX/voicevox_core/pull/1295
+[#1304]: https://github.com/VOICEVOX/voicevox_core/pull/1304
+[#1313]: https://github.com/VOICEVOX/voicevox_core/pull/1313
+[#1315]: https://github.com/VOICEVOX/voicevox_core/pull/1315
+[#1323]: https://github.com/VOICEVOX/voicevox_core/pull/1323
+[#1331]: https://github.com/VOICEVOX/voicevox_core/pull/1331
 
 [VOICEVOX/onnxruntime-builder#25]: https://github.com/VOICEVOX/onnxruntime-builder/pull/25
 

@@ -2,15 +2,14 @@
 //!
 //! メインの部分。[`crate::core`]と[`crate::engine`]の二つはここで用いる。
 
-use anyhow::{anyhow, bail, ensure, Context as _};
+use anyhow::{Context as _, anyhow, bail, ensure};
 use easy_ext::ext;
 use educe::Educe;
 use enum_map::enum_map;
 use futures_util::TryFutureExt as _;
-use itertools::{chain, Itertools as _};
+use itertools::{Itertools as _, chain};
 use std::{
     fmt::{self, Debug},
-    future::Future,
     marker::PhantomData,
     ops::Range,
     sync::Arc,
@@ -22,30 +21,33 @@ use typed_floats::{NonNaNFinite, PositiveFinite};
 use specta::Type;
 
 use crate::{
+    AccentPhrase, AudioQuery, OnExistingVoiceModelId, Result, StyleId, VoiceModelId,
+    VoiceModelMeta,
     asyncs::{Async, BlockingThreadPool, SingleTasked},
     collections::{NonEmptyIterator as _, NonEmptySlice, NonEmptyVec},
     core::{
+        Array1ExtForPostProcess as _, Array1ExtForPreProcess as _, ArrayExt as _,
         devices::{self, DeviceSpec, GpuSpec},
         ensure_minimum_phoneme_length,
         infer::{
-            self,
+            self, InferenceRuntime, InferenceSessionOptions,
             domains::{
-                experimental_talk, talk, DecodeInput, DecodeOutput, ExperimentalTalkDomain,
-                ExperimentalTalkOperation, FrameDecodeDomain, FrameDecodeOperation,
-                GenerateFullIntermediateInput, GenerateFullIntermediateOutput, InferenceDomainMap,
+                DecodeInput, DecodeOutput, ExperimentalTalkDomain, ExperimentalTalkOperation,
+                FrameDecodeDomain, FrameDecodeOperation, GenerateFullIntermediateInput,
+                GenerateFullIntermediateOutput, InferenceDomainMap,
                 PredictSingConsonantLengthInput, PredictSingConsonantLengthOutput,
                 PredictSingF0Input, PredictSingF0Output, PredictSingVolumeInput,
                 PredictSingVolumeOutput, RenderAudioSegmentInput, RenderAudioSegmentOutput,
                 SfDecodeInput, SfDecodeOutput, SingingTeacherDomain, SingingTeacherOperation,
-                TalkDomain, TalkOperation,
+                TalkDomain, TalkOperation, experimental_talk, talk,
             },
-            InferenceRuntime, InferenceSessionOptions,
         },
         pad_decoder_feature,
         status::Status,
-        voice_model, Array1ExtForPostProcess as _, Array1ExtForPreProcess as _, ArrayExt as _,
+        voice_model,
     },
     engine::{
+        DEFAULT_SAMPLING_RATE, IteratorExt as _, PhonemeCode,
         song::{
             self,
             interpret::{ConsonantLengthsFeature, PhonemeFeature, SfDecoderFeature},
@@ -53,15 +55,14 @@ use crate::{
             validate::{ValidatedNote, ValidatedScore},
         },
         talk::{
-            create_kana, initial_process, parse_kana, split_mora, DecoderFeature, LengthedPhoneme,
-            ValidatedAccentPhrase, ValidatedAudioQuery, ValidatedMora,
+            DecoderFeature, LengthedPhoneme, ValidatedAccentPhrase, ValidatedAudioQuery,
+            ValidatedMora, create_kana, initial_process, parse_kana, split_mora,
         },
-        to_s16le_pcm, wav_from_s16le, IteratorExt as _, PhonemeCode, DEFAULT_SAMPLING_RATE,
+        to_s16le_pcm, wav_from_s16le,
     },
     error::ErrorRepr,
     future::FutureExt as _,
     numerics::positive_finite_f32,
-    AccentPhrase, AudioQuery, Result, StyleId, VoiceModelId, VoiceModelMeta,
 };
 
 pub const DEFAULT_CPU_NUM_THREADS: u16 = 0;
@@ -153,6 +154,11 @@ impl Default for InitializeOptions {
             cpu_num_threads: DEFAULT_CPU_NUM_THREADS,
         }
     }
+}
+
+#[derive(Default, Clone, Copy, Debug)]
+struct LoadVoiceModelOptions {
+    on_existing: OnExistingVoiceModelId,
 }
 
 trait AsyncExt: infer::AsyncExt {
@@ -402,12 +408,27 @@ trait AsInner {
         self.use_gpu()
     }
 
-    async fn load_voice_model(&self, model: &voice_model::Inner<Self::Async>) -> crate::Result<()> {
+    async fn load_voice_model(
+        &self,
+        model: &voice_model::Inner<Self::Async>,
+        options: LoadVoiceModelOptions,
+    ) -> crate::Result<()> {
+        // TOCTOUが起きたとしてもモデルを二度ロードするだけで済む。
+        // それよりも`Status`のロック期間を最小にすることを優先したい。
+        if options.on_existing == OnExistingVoiceModelId::Skip
+            && self.is_loaded_voice_model(model.id())
+        {
+            return Ok(());
+        }
+
         let model_bytes = model.read_inference_models().await?;
 
         let status = self.status().clone();
         let header = model.header().clone();
-        Self::Async::unblock(move || status.insert_model(&header, &model_bytes)).await
+        Self::Async::unblock(move || {
+            status.insert_model(&header, &model_bytes, options.on_existing)
+        })
+        .await
     }
 
     fn unload_voice_model(&self, voice_model_id: VoiceModelId) -> Result<()> {
@@ -1522,7 +1543,7 @@ fn list_windows_video_cards() {
     use humansize::BINARY;
     use tracing::{error, info};
     use windows::Win32::Graphics::Dxgi::{
-        CreateDXGIFactory, IDXGIFactory, DXGI_ADAPTER_DESC, DXGI_ERROR_NOT_FOUND,
+        CreateDXGIFactory, DXGI_ADAPTER_DESC, DXGI_ERROR_NOT_FOUND, IDXGIFactory,
     };
 
     info!("検出されたGPU (DirectMLにはGPU 0が使われます):");
@@ -1632,13 +1653,13 @@ pub(crate) mod blocking {
     use typed_floats::{NonNaNFinite, PositiveFinite};
 
     use crate::{
-        asyncs::SingleTasked, future::FutureExt as _, AccentPhrase, AudioQuery, FrameAudioQuery,
-        Score, StyleId, VoiceModelId, VoiceModelMeta,
+        AccentPhrase, AudioQuery, FrameAudioQuery, OnExistingVoiceModelId, Score, StyleId,
+        VoiceModelId, VoiceModelMeta, asyncs::SingleTasked, future::FutureExt as _,
     };
 
     use super::{
         AccelerationMode, AsInner as _, AssumeSingleTasked, InitializeOptions, Inner,
-        InnerRefWithoutTextAnalyzer, SynthesisOptions, TtsOptions,
+        InnerRefWithoutTextAnalyzer, LoadVoiceModelOptions, SynthesisOptions, TtsOptions,
     };
 
     pub use super::AudioFeature;
@@ -1707,11 +1728,15 @@ pub(crate) mod blocking {
 
         /// 音声モデルを読み込む。
         #[cfg_attr(doc, doc(alias = "voicevox_synthesizer_load_voice_model"))]
-        pub fn load_voice_model(
-            &self,
-            model: &crate::blocking::VoiceModelFile,
-        ) -> crate::Result<()> {
-            self.0.load_voice_model(model.inner()).block_on()
+        pub fn load_voice_model<'a>(
+            &'a self,
+            model: &'a crate::blocking::VoiceModelFile,
+        ) -> LoadVoiceModel<'a> {
+            LoadVoiceModel {
+                synthesizer: self.0.without_text_analyzer(),
+                model,
+                options: Default::default(),
+            }
         }
 
         /// 音声モデルの読み込みを解除する。
@@ -2460,6 +2485,31 @@ pub(crate) mod blocking {
 
     #[must_use = "this is a builder. it does nothing until `perform`ed"]
     #[derive(Debug)]
+    pub struct LoadVoiceModel<'a> {
+        synthesizer: InnerRefWithoutTextAnalyzer<'a, SingleTasked>,
+        model: &'a crate::blocking::VoiceModelFile,
+        options: LoadVoiceModelOptions,
+    }
+
+    impl LoadVoiceModel<'_> {
+        /// 同じ`id`の[`VoiceModelFile`]が既に読み込まれていたときのふるまい。
+        ///
+        /// [`VoiceModelFile`]: crate::blocking::VoiceModelFile
+        pub fn on_existing(mut self, on_existing: OnExistingVoiceModelId) -> Self {
+            self.options.on_existing = on_existing;
+            self
+        }
+
+        /// 実行する。
+        pub fn perform(self) -> crate::Result<()> {
+            self.synthesizer
+                .load_voice_model(self.model.inner(), self.options)
+                .block_on()
+        }
+    }
+
+    #[must_use = "this is a builder. it does nothing until `perform`ed"]
+    #[derive(Debug)]
     pub struct PrecomputeRender<'a> {
         synthesizer: InnerRefWithoutTextAnalyzer<'a, SingleTasked>,
         audio_query: &'a AudioQuery,
@@ -2575,13 +2625,13 @@ pub(crate) mod nonblocking {
     use typed_floats::{NonNaNFinite, PositiveFinite};
 
     use crate::{
-        asyncs::BlockingThreadPool, AccentPhrase, AudioQuery, FrameAudioQuery, Result, Score,
-        StyleId, VoiceModelId, VoiceModelMeta,
+        AccentPhrase, AudioQuery, FrameAudioQuery, OnExistingVoiceModelId, Result, Score, StyleId,
+        VoiceModelId, VoiceModelMeta, asyncs::BlockingThreadPool,
     };
 
     use super::{
         AccelerationMode, AsInner as _, AssumeBlockable, FrameSynthesisOptions, InitializeOptions,
-        Inner, InnerRefWithoutTextAnalyzer, SynthesisOptions, TtsOptions,
+        Inner, InnerRefWithoutTextAnalyzer, LoadVoiceModelOptions, SynthesisOptions, TtsOptions,
     };
 
     /// 音声シンセサイザ。
@@ -2651,11 +2701,15 @@ pub(crate) mod nonblocking {
         }
 
         /// 音声モデルを読み込む。
-        pub async fn load_voice_model(
-            &self,
-            model: &crate::nonblocking::VoiceModelFile,
-        ) -> Result<()> {
-            self.0.load_voice_model(model.inner()).await
+        pub fn load_voice_model<'a>(
+            &'a self,
+            model: &'a crate::nonblocking::VoiceModelFile,
+        ) -> LoadVoiceModel<'a> {
+            LoadVoiceModel {
+                synthesizer: self.0.without_text_analyzer(),
+                model,
+                options: Default::default(),
+            }
         }
 
         /// 音声モデルの読み込みを解除する。
@@ -3247,6 +3301,31 @@ pub(crate) mod nonblocking {
 
     #[must_use = "this is a builder. it does nothing until `perform`ed"]
     #[derive(Debug)]
+    pub struct LoadVoiceModel<'a> {
+        synthesizer: InnerRefWithoutTextAnalyzer<'a, BlockingThreadPool>,
+        model: &'a crate::nonblocking::VoiceModelFile,
+        options: LoadVoiceModelOptions,
+    }
+
+    impl LoadVoiceModel<'_> {
+        /// 同じ`id`の[`VoiceModelFile`]が既に読み込まれていたときのふるまい。
+        ///
+        /// [`VoiceModelFile`]: crate::nonblocking::VoiceModelFile
+        pub fn on_existing(mut self, on_existing: OnExistingVoiceModelId) -> Self {
+            self.options.on_existing = on_existing;
+            self
+        }
+
+        /// 実行する。
+        pub async fn perform(self) -> crate::Result<()> {
+            self.synthesizer
+                .load_voice_model(self.model.inner(), self.options)
+                .await
+        }
+    }
+
+    #[must_use = "this is a builder. it does nothing until `perform`ed"]
+    #[derive(Debug)]
     pub struct Synthesis<'a> {
         synthesizer: InnerRefWithoutTextAnalyzer<'a, BlockingThreadPool>,
         audio_query: &'a AudioQuery,
@@ -3379,8 +3458,8 @@ mod tests {
 
     use super::{AccelerationMode, AsInner as _, DEFAULT_HEAVY_INFERENCE_CANCELLABLE};
     use crate::{
-        asyncs::BlockingThreadPool, engine::talk::Mora, macros::tests::assert_debug_fmt_eq,
         AccentPhrase, FramePhoneme, Note, NoteId, Result, Score, StyleId,
+        asyncs::BlockingThreadPool, engine::talk::Mora, macros::tests::assert_debug_fmt_eq,
     };
     use ::test_util::OPEN_JTALK_DIC_DIR;
     use itertools::Itertools as _;
@@ -3401,6 +3480,7 @@ mod tests {
 
         let result = syntesizer
             .load_voice_model(&crate::nonblocking::VoiceModelFile::sample().await.unwrap())
+            .perform()
             .await;
 
         assert_debug_fmt_eq!(
@@ -3443,6 +3523,7 @@ mod tests {
         );
         syntesizer
             .load_voice_model(&crate::nonblocking::VoiceModelFile::sample().await.unwrap())
+            .perform()
             .await
             .unwrap();
 
@@ -3468,6 +3549,7 @@ mod tests {
 
         syntesizer
             .load_voice_model(&crate::nonblocking::VoiceModelFile::sample().await.unwrap())
+            .perform()
             .await
             .unwrap();
 
@@ -3499,6 +3581,7 @@ mod tests {
         .unwrap();
         syntesizer
             .load_voice_model(&crate::nonblocking::VoiceModelFile::sample().await.unwrap())
+            .perform()
             .await
             .unwrap();
 
@@ -3541,6 +3624,7 @@ mod tests {
         .unwrap();
         syntesizer
             .load_voice_model(&crate::nonblocking::VoiceModelFile::sample().await.unwrap())
+            .perform()
             .await
             .unwrap();
 
@@ -3595,6 +3679,7 @@ mod tests {
         .unwrap();
         syntesizer
             .load_voice_model(&crate::nonblocking::VoiceModelFile::sample().await.unwrap())
+            .perform()
             .await
             .unwrap();
 
@@ -3630,6 +3715,7 @@ mod tests {
         .unwrap();
         syntesizer
             .load_voice_model(&crate::nonblocking::VoiceModelFile::sample().await.unwrap())
+            .perform()
             .await
             .unwrap();
 
@@ -3667,6 +3753,7 @@ mod tests {
         .unwrap();
         syntesizer
             .load_voice_model(&crate::nonblocking::VoiceModelFile::sample().await.unwrap())
+            .perform()
             .await
             .unwrap();
 
@@ -3777,7 +3864,7 @@ mod tests {
         .unwrap();
 
         let model = &crate::nonblocking::VoiceModelFile::sample().await.unwrap();
-        syntesizer.load_voice_model(model).await.unwrap();
+        syntesizer.load_voice_model(model).perform().await.unwrap();
 
         let query = match input {
             Input::Kana(input) => {
@@ -3848,7 +3935,7 @@ mod tests {
         .unwrap();
 
         let model = &crate::nonblocking::VoiceModelFile::sample().await.unwrap();
-        syntesizer.load_voice_model(model).await.unwrap();
+        syntesizer.load_voice_model(model).perform().await.unwrap();
 
         let accent_phrases = match input {
             Input::Kana(input) => {
@@ -3916,7 +4003,7 @@ mod tests {
         .unwrap();
 
         let model = &crate::nonblocking::VoiceModelFile::sample().await.unwrap();
-        syntesizer.load_voice_model(model).await.unwrap();
+        syntesizer.load_voice_model(model).perform().await.unwrap();
 
         let accent_phrases = syntesizer
             .create_accent_phrases("同じ、文章、です。完全に、同一です。", StyleId::new(1))
@@ -3979,7 +4066,7 @@ mod tests {
         .unwrap();
 
         let model = &crate::nonblocking::VoiceModelFile::sample().await.unwrap();
-        syntesizer.load_voice_model(model).await.unwrap();
+        syntesizer.load_voice_model(model).perform().await.unwrap();
 
         let accent_phrases = syntesizer
             .create_accent_phrases("これはテストです", StyleId::new(0))
@@ -4020,7 +4107,7 @@ mod tests {
         .unwrap();
 
         let model = &crate::nonblocking::VoiceModelFile::sample().await.unwrap();
-        syntesizer.load_voice_model(model).await.unwrap();
+        syntesizer.load_voice_model(model).perform().await.unwrap();
 
         let accent_phrases = syntesizer
             .create_accent_phrases("これはテストです", StyleId::new(0))
@@ -4061,7 +4148,7 @@ mod tests {
         .unwrap();
 
         let model = &crate::nonblocking::VoiceModelFile::sample().await.unwrap();
-        syntesizer.load_voice_model(model).await.unwrap();
+        syntesizer.load_voice_model(model).perform().await.unwrap();
 
         let accent_phrases = syntesizer
             .create_accent_phrases("これはテストです", StyleId::new(0))
@@ -4120,7 +4207,7 @@ mod tests {
         .unwrap();
 
         let model = &crate::nonblocking::VoiceModelFile::sample().await.unwrap();
-        synthesizer.load_voice_model(model).await.unwrap();
+        synthesizer.load_voice_model(model).perform().await.unwrap();
 
         let score = &Score {
             notes: vec![
@@ -4161,22 +4248,24 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        assert!([
-            num_total_frames,
-            frame_audio_query
-                .phonemes
-                .iter()
-                .map(
-                    |&FramePhoneme { frame_length, .. }| typeshare::usize_from_u53_saturated(
-                        frame_length
+        assert!(
+            [
+                num_total_frames,
+                frame_audio_query
+                    .phonemes
+                    .iter()
+                    .map(
+                        |&FramePhoneme { frame_length, .. }| typeshare::usize_from_u53_saturated(
+                            frame_length
+                        )
                     )
-                )
-                .sum::<usize>(),
-            frame_audio_query.f0.len(),
-            frame_audio_query.volume.len(),
-        ]
-        .into_iter()
-        .all_equal());
+                    .sum::<usize>(),
+                frame_audio_query.f0.len(),
+                frame_audio_query.volume.len(),
+            ]
+            .into_iter()
+            .all_equal()
+        );
 
         let f0s = synthesizer
             .create_sing_frame_f0(score, &frame_audio_query, 6000.into())

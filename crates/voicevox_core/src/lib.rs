@@ -2,14 +2,25 @@
 //!
 //! # Feature flags
 //!
-//! このクレートの利用にあたっては以下の二つの[Cargoフィーチャ]のうちどちらかを有効にしなければならない。両方の有効化はコンパイルエラーとなる。[`Onnxruntime`]の初期化方法はこれらのフィーチャによって決まる。
-//!
+//! - **`buildtime-download-onnxruntime`**: ビルド時に後述する環境変数`VVCORE_BUILD_DOWNLOAD_AND_COPY_ORT`が`1`なら、ONNX
+//!   Runtimeのバイナリをダウンロードしてtarget
+//!   directory内の複数箇所に配置する。`VVCORE_BUILD_DOWNLOAD_AND_COPY_ORT`が`1`ではないなら警告を出して何もしない。後述の`link-onnxruntime`フィーチャと合わせると、システムにONNX Runtimeが無くてもビルドが可能になる。
 //! - **`load-onnxruntime`**: ONNX Runtimeを`dlopen`/`LoadLibraryExW`で開く。[CUDA]と[DirectML]が利用可能。
-//! - **`link-onnxruntime`**: ONNX Runtimeをロード時動的リンクする。iOSのような`dlopen`の利用が困難な環境でのみこちらを利用するべきである。_Note_:
+//! - **`link-onnxruntime`**: ONNX Runtimeをロード時動的リンクする。そのためビルドするためにはシステムにONNX
+//!   Runtimeがインストールされているか、`buildtime-download-onnxruntime`によるダウンロードを行う必要がある。iOSのような`dlopen`の利用が困難な環境でのみこちらを利用するべきである。_Note_:
 //!   [動的リンク対象のライブラリ名]は`onnxruntime`で固定。変更は`patchelf(1)`や`install_name_tool(1)`で行うこと。また、[ONNX RuntimeのGPU機能]を使うことは不可。
 //! - **`specta`**: [`specta`](https://crates.io/crates/specta)クレートを利用して型情報を生成する。`tauri_specta`などの他のクレートと組み合わせて利用することを想定している。  
 //!   _WARNING_: 2.0.0-rc.4以降で導入されたフィーチャであり、1.x系とは互換性がない。
 //! 
+//!
+//! このクレートの利用にあたっては上記の`load-onnxruntime`か`link-onnxruntime`のうちどちらかを有効にしなければならない。両方の有効化はコンパイルエラーとなる。[`Onnxruntime`]の初期化方法はこれらのフィーチャによって決まる。
+//!
+//! # Build time environment variables
+//!
+//! - **`VVCORE_BUILD_DOWNLOAD_AND_COPY_ORT`**: `buildtime-download-onnxruntime`フィーチャが有効化されているときのみ機能する。`1`のとき、ONNX
+//!   Runtimeのバイナリをダウンロードしてtarget
+//!   directory内の複数箇所に配置する。`buildtime-download-onnxruntime`フィーチャが無効化されているときは値が`1`であっても、警告のみを出しダウンロードは行わない。
+//!
 //! [Cargoフィーチャ]: https://doc.rust-lang.org/stable/cargo/reference/features.html
 //! [CUDA]: https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html
 //! [DirectML]: https://onnxruntime.ai/docs/execution-providers/DirectML-ExecutionProvider.html
@@ -34,7 +45,7 @@
 //! };
 //!
 //! // ダウンローダーにて`onnxruntime`としてダウンロードできるもの
-//! # #[cfg(any())]
+//! # #[cfg(false)]
 //! const VVORT: &str = concatcp!(
 //!     "./voicevox_core/onnxruntime/lib/",
 //!     Onnxruntime::LIB_VERSIONED_FILENAME,
@@ -42,20 +53,20 @@
 //! # use test_util::ONNXRUNTIME_DYLIB_PATH as VVORT;
 //!
 //! // ダウンローダーにて`dict`としてダウンロードできるもの
-//! # #[cfg(any())]
+//! # #[cfg(false)]
 //! const OJT_DIC: &str = "./voicevox_core/dict/open_jtalk_dic_utf_8-1.11";
 //! # use test_util::OPEN_JTALK_DIC_DIR as OJT_DIC;
 //!
 //! // ダウンローダーにて`models`としてダウンロードできるもの
-//! # #[cfg(any())]
+//! # #[cfg(false)]
 //! const VVM: &str = "./voicevox_core/models/vvms/0.vvm";
 //! # use test_util::SAMPLE_VOICE_MODEL_FILE_PATH as VVM;
 //!
-//! # #[cfg(any())]
+//! # #[cfg(false)]
 //! const TARGET_CHARACTER_NAME: &str = "ずんだもん";
 //! # const TARGET_CHARACTER_NAME: &str = "dummy1";
 //! #
-//! # #[cfg(any())]
+//! # #[cfg(false)]
 //! const TARGET_STYLE_NAME: &str = "ノーマル";
 //! # const TARGET_STYLE_NAME: &str = "style1";
 //! #
@@ -69,7 +80,9 @@
 //!
 //! dbg!(synth.is_gpu_mode());
 //!
-//! synth.load_voice_model(&VoiceModelFile::open(VVM)?)?;
+//! synth
+//!     .load_voice_model(&VoiceModelFile::open(VVM)?)
+//!     .perform()?;
 //!
 //! let StyleMeta { id: style_id, .. } = synth
 //!     .metas()
@@ -115,7 +128,7 @@
 //! };
 //!
 //! // ダウンローダーにて`onnxruntime`としてダウンロードできるもの
-//! # #[cfg(any())]
+//! # #[cfg(false)]
 //! const VVORT: &str = concatcp!(
 //!     "./voicevox_core/onnxruntime/lib/",
 //!     Onnxruntime::LIB_VERSIONED_FILENAME,
@@ -123,23 +136,23 @@
 //! # use test_util::ONNXRUNTIME_DYLIB_PATH as VVORT;
 //!
 //! // ダウンローダーにて`models`としてダウンロードできるもの
-//! # #[cfg(any())]
+//! # #[cfg(false)]
 //! const VVM: &str = "./voicevox_core/models/vvms/s0.vvm";
 //! # use test_util::SAMPLE_VOICE_MODEL_FILE_PATH as VVM;
 //!
-//! # #[cfg(any())]
+//! # #[cfg(false)]
 //! const SINGING_TEACHER_CHARACTER_NAME: &str = "波音リツ";
 //! # const SINGING_TEACHER_CHARACTER_NAME: &str = "dummy4";
 //! #
-//! # #[cfg(any())]
+//! # #[cfg(false)]
 //! const SINGING_TEACHER_STYLE_NAME: &str = "ノーマル";
 //! # const SINGING_TEACHER_STYLE_NAME: &str = "style4-2";
 //! #
-//! # #[cfg(any())]
+//! # #[cfg(false)]
 //! const SINGER_CHARACTER_NAME: &str = "ずんだもん";
 //! # const SINGER_CHARACTER_NAME: &str = "dummy4";
 //! #
-//! # #[cfg(any())]
+//! # #[cfg(false)]
 //! const SINGER_STYLE_NAME: &str = "ノーマル";
 //! # const SINGER_STYLE_NAME: &str = "style4-1";
 //!
@@ -150,7 +163,9 @@
 //!
 //! dbg!(synth.is_gpu_mode());
 //!
-//! synth.load_voice_model(&VoiceModelFile::open(VVM)?)?;
+//! synth
+//!     .load_voice_model(&VoiceModelFile::open(VVM)?)
+//!     .perform()?;
 //!
 //! let metas = &synth.metas();
 //! let find_style = |character_name, style_name, style_types: &[_]| {
@@ -237,11 +252,11 @@
 //!
 //! fn f(synth: &Synthesizer<impl TextAnalyzer>) -> anyhow::Result<()> {
 //! #    const TEXT: &str = "";
-//! #   #[cfg(any())]
+//! #   #[cfg(false)]
 //!     const TEXT: &str = _;
 //! #
 //! #   const STYLE_ID: StyleId = StyleId(0);
-//! #   #[cfg(any())]
+//! #   #[cfg(false)]
 //!     const STYLE_ID: StyleId = _;
 //!
 //!     let wav1 = synth.tts(TEXT, STYLE_ID).perform()?;
@@ -283,35 +298,32 @@
 //! #     let ojt = OpenJtalk::new(OPEN_JTALK_DIC_DIR)?;
 //! #     Synthesizer::builder(ort).text_analyzer(ojt).build()?
 //! # };
-//! # synth.load_voice_model(&VoiceModelFile::open(SAMPLE_VOICE_MODEL_FILE_PATH)?)?;
+//! # synth
+//! #     .load_voice_model(&VoiceModelFile::open(SAMPLE_VOICE_MODEL_FILE_PATH)?)
+//! #     .perform()?;
 //! # f(synth)?;
 //! # anyhow::Ok(())
 //! ```
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-#[cfg(not(any(feature = "load-onnxruntime", feature = "link-onnxruntime")))]
-compile_error!("either `load-onnxruntime` or `link-onnxruntime` must be enabled");
+#[cfg(all(not(doc), feature = "load-onnxruntime", feature = "link-onnxruntime"))]
+compile_error!("`load-onnxruntime` and `link-onnxruntime` cannot be enabled at the same time");
 
-#[cfg(not(doc))]
+#[cfg(all(not(feature = "load-onnxruntime"), feature = "link-onnxruntime"))]
 const _: () = {
-    #[cfg(all(feature = "load-onnxruntime", feature = "link-onnxruntime"))]
-    compile_error!("`load-onnxruntime` and `link-onnxruntime` cannot be enabled at the same time");
+    use dummy::*;
 
-    // Rust APIでvoicevox-ortを他のクレートが利用する可能性を考え、voicevox-ort側とfeatureがズレ
-    // ないようにする
+    #[expect(unused_imports)]
+    use ort::*;
 
-    #[cfg(feature = "load-onnxruntime")]
-    ort::assert_feature!(
-        cfg(feature = "load-dynamic"),
-        "when `load-onnxruntime` is enabled,`voicevox-ort/load-dynamic` must be also enabled",
-    );
+    #[expect(path_statements)]
+    init_from; // PLEASE READ → : when `link-onnxruntime` is enabled,`ort/load-dynamic` must be disabled
 
-    #[cfg(feature = "link-onnxruntime")]
-    ort::assert_feature!(
-        cfg(not(feature = "load-dynamic")),
-        "when `link-onnxruntime` is enabled,`voicevox-ort/load-dynamic` must be disabled",
-    );
+    mod dummy {
+        #[expect(non_upper_case_globals)]
+        pub(super) const init_from: () = ();
+    }
 };
 
 /// ```compile_fail
@@ -455,18 +467,19 @@ pub use self::{
     core::{
         devices::SupportedDevices,
         metas::{CharacterMeta, CharacterVersion, StyleId, StyleMeta, StyleType, VoiceModelMeta},
+        status::OnExistingVoiceModelId,
         voice_model::VoiceModelId,
     },
     engine::{
+        Phoneme, SamplingRate, Sil,
         song::{
             queries::{FrameAudioQuery, FramePhoneme, Key, Note, NoteId, OptionalLyric, Score},
             validate::ensure_compatible,
         },
         talk::{
-            user_dict::{UserDictWord, UserDictWordBuilder, UserDictWordType},
             AccentPhrase, AudioQuery, Mora,
+            user_dict::{UserDictWord, UserDictWordBuilder, UserDictWordType},
         },
-        Phoneme, SamplingRate, Sil,
     },
     error::{Error, ErrorKind},
     result::Result,
