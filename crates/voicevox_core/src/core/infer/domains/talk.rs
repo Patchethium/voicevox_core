@@ -16,6 +16,10 @@ pub(crate) enum TalkDomain {}
 impl InferenceDomain for TalkDomain {
     type Operation = TalkOperation;
 
+    fn needs_pitch_noise(operation: Self::Operation) -> bool {
+        matches!(operation, TalkOperation::PredictIntonation)
+    }
+
     fn style_types() -> &'static BTreeSet<StyleType> {
         static STYLE_TYPES: LazyLock<BTreeSet<StyleType>> =
             LazyLock::new(|| [StyleType::Talk].into());
@@ -75,6 +79,7 @@ pub(crate) struct PredictIntonationInput {
     pub(crate) start_accent_phrase_list: Array1<i64>,
     pub(crate) end_accent_phrase_list: Array1<i64>,
     pub(crate) speaker_id: Array1<i64>,
+    pub(crate) azalea_pitch_noise: Array1<f32>,
 }
 
 #[derive(InferenceOutputSignature)]

@@ -17,6 +17,8 @@
 
 ## API
 
+This fork adds [seeded autoregressive pitch noise for Rust](docs/guide/dev/pitch-noise.md).
+
 [API ドキュメント](https://voicevox.github.io/voicevox_core/apis/)をご覧ください。
 
 ## ユーザーガイド

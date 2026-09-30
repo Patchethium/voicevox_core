@@ -101,6 +101,10 @@ pub(crate) trait InferenceRuntime: 'static {
 pub(crate) trait InferenceDomain: Sized {
     type Operation: InferenceOperation;
 
+    fn needs_pitch_noise(_operation: Self::Operation) -> bool {
+        false
+    }
+
     /// 対応する`StyleType`。
     ///
     /// 複数の`InferenceDomain`に対応する`StyleType`があってもよい。
@@ -276,6 +280,8 @@ impl<D: PartialEq> ParamInfo<D> {
 pub(crate) struct InferenceSessionOptions {
     pub(crate) cpu_num_threads: u16,
     pub(crate) device: DeviceSpec,
+    #[new(value = "false")]
+    pub(crate) pitch_noise: bool,
 }
 
 // TODO: `ShapeError`を直接扱い、データ型違いはパニックにすべきでは？

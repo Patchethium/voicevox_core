@@ -290,6 +290,18 @@ impl InferenceRuntime for self::blocking::Onnxruntime {
         static IS_VOICEVOX_ONNXRUNTIME: LazyLock<bool> =
             LazyLock::new(|| ort::info().starts_with("VOICEVOX ORT Build Info: "));
 
+        let transformed;
+        let model = if options.pitch_noise {
+            let started = std::time::Instant::now();
+            transformed = ModelBytes::Onnx(
+                export_and_transform(model).context("export/transform pitch predictor")?,
+            );
+            tracing::debug!(elapsed = ?started.elapsed(), "pitch predictor transformation");
+            &transformed
+        } else {
+            model
+        };
+
         let mut builder = ort::session::Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level1)
             .map_err(ort::Error::<()>::from)?
@@ -326,7 +338,8 @@ impl InferenceRuntime for self::blocking::Onnxruntime {
                     .map_err(ort::Error::<()>::from)?
                     .commit_from_memory(bin)
             }
-        }?;
+        }
+        .context("load final inference session")?;
 
         let input_param_infos = sess
             .inputs()
@@ -895,3 +908,39 @@ mod tests {
         assert!(result.is_ok(), "{result:?}");
     }
 }
+
+fn export_and_transform(model: &ModelBytes) -> anyhow::Result<Vec<u8>> {
+    let directory = tempfile::tempdir().context("create temporary pitch export directory")?;
+    let path = directory.path().join("pitch.onnx");
+    let mut builder = ort::session::Session::builder()?
+        .with_optimization_level(GraphOptimizationLevel::Disable)
+        .map_err(ort::Error::<()>::from)?
+        .with_intra_threads(1)
+        .map_err(ort::Error::<()>::from)?
+        .with_optimized_model_path(&path)
+        .map_err(ort::Error::<()>::from)?;
+    CPUExecutionProvider::default().register(&mut builder)?;
+    let bytes = match model {
+        ModelBytes::Onnx(bytes) => bytes,
+        ModelBytes::VvBin(bytes) => {
+            ensure!(
+                ort::info().starts_with("VOICEVOX ORT Build Info: "),
+                "pitch vv-bin export requires VOICEVOX ONNX Runtime"
+            );
+            builder = builder
+                .with_config_entry("session.use_vv_bin", "1")
+                .map_err(ort::Error::<()>::from)?;
+            bytes
+        }
+    };
+    drop(
+        builder
+            .commit_from_memory(bytes)
+            .context("export pitch predictor on CPU")?,
+    );
+    super::pitch_graph::transform(&std::fs::read(&path).context("read exported pitch predictor")?)
+}
+
+#[cfg(test)]
+#[path = "pitch_tests.rs"]
+mod pitch_tests;

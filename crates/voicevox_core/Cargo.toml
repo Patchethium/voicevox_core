@@ -50,6 +50,11 @@ jlabel.workspace = true
 libloading = { workspace = true, optional = true }
 ndarray.workspace = true
 num-traits.workspace = true
+onnx-protobuf.workspace = true
+protobuf.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+rand_distr.workspace = true
 once_cell.workspace = true
 open_jtalk.workspace = true
 ort = { workspace = true, features = ["std", "ndarray", "tracing", "api-17", "alternative-backend"], default-features = false }
@@ -95,3 +100,7 @@ windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Dx
 [lints.rust]
 unsafe_code = "allow" # 色々必要なため
 rust_2018_idioms = "warn"
+
+[[example]]
+name = "pitch_noise"
+required-features = ["load-onnxruntime"]

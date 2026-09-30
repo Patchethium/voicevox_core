@@ -443,6 +443,7 @@ mod error;
 mod future;
 mod macros;
 mod numerics;
+mod pitch_noise;
 mod result;
 mod synthesizer;
 mod task;
@@ -482,6 +483,7 @@ pub use self::{
         },
     },
     error::{Error, ErrorKind},
+    pitch_noise::PitchNoiseOptions,
     result::Result,
     synthesizer::AccelerationMode,
     version::VERSION,

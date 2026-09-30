@@ -150,7 +150,7 @@ pub(crate) enum ErrorRepr {
     clippy::manual_non_exhaustive,
     reason = "バインディングを作るときはexhaustiveとして扱いたい"
 )]
-#[cfg_attr(doc, doc(alias = "VoicevoxResultCode"))]
+#[cfg_attr(all(doc, not(feature = "specta")), doc(alias = "VoicevoxResultCode"))]
 #[cfg_attr(feature = "specta", derive(Type))]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum ErrorKind {

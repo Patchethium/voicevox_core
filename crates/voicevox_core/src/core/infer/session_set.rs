@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fmt::Display, marker::PhantomData, sync::Arc};
 
-use anyhow::bail;
+use anyhow::{Context as _, bail};
 use enum_map::{Enum as _, EnumMap};
 use itertools::Itertools as _;
 
@@ -27,8 +27,21 @@ impl<R: InferenceRuntime, D: InferenceDomain> InferenceSessionSet<R, D> {
                 let (expected_input_param_infos, expected_output_param_infos) =
                     <D::Operation as InferenceOperation>::PARAM_INFOS[op];
 
-                let (sess, actual_input_param_infos, actual_output_param_infos) =
-                    rt.new_session(model_bytes, options[op])?;
+                let (sess, actual_input_param_infos, actual_output_param_infos) = rt
+                    .new_session(
+                        model_bytes,
+                        InferenceSessionOptions {
+                            pitch_noise: D::needs_pitch_noise(op),
+                            ..options[op]
+                        },
+                    )
+                    .with_context(|| {
+                        format!(
+                            "{} operation {}",
+                            std::any::type_name::<D>(),
+                            op.into_usize()
+                        )
+                    })?;
 
                 check_param_infos(expected_input_param_infos, &actual_input_param_infos)?;
                 check_param_infos(expected_output_param_infos, &actual_output_param_infos)?;

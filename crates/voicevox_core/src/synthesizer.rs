@@ -21,8 +21,8 @@ use typed_floats::{NonNaNFinite, PositiveFinite};
 use specta::Type;
 
 use crate::{
-    AccentPhrase, AudioQuery, OnExistingVoiceModelId, Result, StyleId, VoiceModelId,
-    VoiceModelMeta,
+    AccentPhrase, AudioQuery, OnExistingVoiceModelId, PitchNoiseOptions, Result, StyleId,
+    VoiceModelId, VoiceModelMeta,
     asyncs::{Async, BlockingThreadPool, SingleTasked},
     collections::{NonEmptyIterator as _, NonEmptySlice, NonEmptyVec},
     core::{
@@ -121,7 +121,7 @@ impl<A: infer::AsyncExt> Default for FrameSynthesisOptions<A> {
 }
 
 /// ハードウェアアクセラレーションモードを設定する設定値。
-#[cfg_attr(doc, doc(alias = "VoicevoxAccelerationMode"))]
+#[cfg_attr(all(doc, not(feature = "specta")), doc(alias = "VoicevoxAccelerationMode"))]
 #[expect(
     clippy::manual_non_exhaustive,
     reason = "バインディングを作るときはexhaustiveとして扱いたい"
@@ -625,6 +625,17 @@ trait AsInner {
         accent_phrases: &[AccentPhrase],
         style_id: StyleId,
     ) -> Result<Vec<AccentPhrase>> {
+        self.replace_mora_pitch_with_noise(accent_phrases, style_id, PitchNoiseOptions::default())
+            .await
+    }
+
+    async fn replace_mora_pitch_with_noise(
+        &self,
+        accent_phrases: &[AccentPhrase],
+        style_id: StyleId,
+        options: PitchNoiseOptions,
+    ) -> Result<Vec<AccentPhrase>> {
+        options.validate()?;
         let accent_phrases = &accent_phrases
             .iter()
             .map(AccentPhrase::to_validated)
@@ -668,8 +679,13 @@ trait AsInner {
             end_accent_phrase_list.push(base_end_accent_phrase_list[vowel_index as usize]);
         }
 
+        let noise = options.sample(
+            vowel_phoneme_data_list
+                .iter()
+                .map(|vowel| !vowel.is_unvoiced()),
+        )?;
         let mut f0_list = self
-            .predict_intonation(
+            .predict_intonation_with_noise(
                 vowel_phoneme_list.len(),
                 vowel_phoneme_list,
                 consonant_phoneme_list,
@@ -678,6 +694,7 @@ trait AsInner {
                 &start_accent_phrase_list,
                 &end_accent_phrase_list,
                 style_id,
+                &noise,
             )
             .await?;
 
@@ -1102,6 +1119,33 @@ trait AsInner {
         end_accent_phrase_vector: &[i64],
         style_id: StyleId,
     ) -> Result<Vec<f32>> {
+        self.predict_intonation_with_noise(
+            length,
+            vowel_phoneme_vector,
+            consonant_phoneme_vector,
+            start_accent_vector,
+            end_accent_vector,
+            start_accent_phrase_vector,
+            end_accent_phrase_vector,
+            style_id,
+            &vec![0.0; length],
+        )
+        .await
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    async fn predict_intonation_with_noise(
+        &self,
+        length: usize,
+        vowel_phoneme_vector: &[i64],
+        consonant_phoneme_vector: &[i64],
+        start_accent_vector: &[i64],
+        end_accent_vector: &[i64],
+        start_accent_phrase_vector: &[i64],
+        end_accent_phrase_vector: &[i64],
+        style_id: StyleId,
+        noise: &[f32],
+    ) -> Result<Vec<f32>> {
         let status = self.status().clone();
         let vowel_phoneme_vector = ndarray::arr1(vowel_phoneme_vector);
         let consonant_phoneme_vector = ndarray::arr1(consonant_phoneme_vector);
@@ -1119,6 +1163,7 @@ trait AsInner {
                 start_accent_phrase_vector,
                 end_accent_phrase_vector,
                 style_id,
+                ndarray::arr1(noise),
             )
             .await
     }
@@ -1270,6 +1315,7 @@ impl<R: InferenceRuntime> Status<R> {
         start_accent_phrase_vector: ndarray::Array1<i64>,
         end_accent_phrase_vector: ndarray::Array1<i64>,
         style_id: StyleId,
+        noise: ndarray::Array1<f32>,
     ) -> Result<Vec<f32>> {
         // `TalkDomain`と`ExperimentalTalkDomain`の両方がある場合、`TalkDomain`を優先
         if self.contains_domain::<TalkDomain>(style_id) {
@@ -1286,11 +1332,12 @@ impl<R: InferenceRuntime> Status<R> {
                         start_accent_phrase_list: start_accent_phrase_vector,
                         end_accent_phrase_list: end_accent_phrase_vector,
                         speaker_id: ndarray::arr1(&[inner_voice_id.raw_id().into()]),
+                        azalea_pitch_noise: noise,
                     },
                     A::LIGHT_INFERENCE_CANCELLABLE,
                 )
                 .await?;
-            return Ok(output.into_vec());
+            return finite_pitch(output.into_vec(), length);
         }
         let (model_id, inner_voice_id) = self.ids_for::<ExperimentalTalkDomain>(style_id)?;
 
@@ -1306,12 +1353,13 @@ impl<R: InferenceRuntime> Status<R> {
                     start_accent_phrase_list: start_accent_phrase_vector,
                     end_accent_phrase_list: end_accent_phrase_vector,
                     speaker_id: ndarray::arr1(&[inner_voice_id.raw_id().into()]),
+                    azalea_pitch_noise: noise,
                 },
                 A::LIGHT_INFERENCE_CANCELLABLE,
             )
             .await?;
 
-        Ok(output.into_vec())
+        finite_pitch(output.into_vec(), length)
     }
 
     /// モデル`generate_full_intermediate`の実行と、その前後の処理を行う。
@@ -1885,6 +1933,19 @@ pub(crate) mod blocking {
         ) -> crate::Result<Vec<AccentPhrase>> {
             self.0
                 .replace_mora_pitch(accent_phrases, style_id)
+                .block_on()
+        }
+
+        /// Replace pitches with seeded Gaussian noise in the autoregressive feedback loop.
+        /// All non-pitch fields are preserved. See [`crate::PitchNoiseOptions`].
+        pub fn replace_mora_pitch_with_noise(
+            &self,
+            accent_phrases: &[AccentPhrase],
+            style_id: StyleId,
+            options: crate::PitchNoiseOptions,
+        ) -> crate::Result<Vec<AccentPhrase>> {
+            self.0
+                .replace_mora_pitch_with_noise(accent_phrases, style_id, options)
                 .block_on()
         }
 
@@ -2817,6 +2878,19 @@ pub(crate) mod nonblocking {
             style_id: StyleId,
         ) -> Result<Vec<AccentPhrase>> {
             self.0.replace_mora_pitch(accent_phrases, style_id).await
+        }
+
+        /// Replace pitches with seeded Gaussian noise in the autoregressive feedback loop.
+        /// All non-pitch fields are preserved. See [`crate::PitchNoiseOptions`].
+        pub async fn replace_mora_pitch_with_noise(
+            &self,
+            accent_phrases: &[AccentPhrase],
+            style_id: StyleId,
+            options: crate::PitchNoiseOptions,
+        ) -> Result<Vec<AccentPhrase>> {
+            self.0
+                .replace_mora_pitch_with_noise(accent_phrases, style_id, options)
+                .await
         }
 
         /// AquesTalk風記法から[AudioQuery]を生成する。
@@ -4306,4 +4380,27 @@ mod tests {
             }
         }
     }
+}
+
+fn finite_pitch(output: Vec<f32>, length: usize) -> Result<Vec<f32>> {
+    if output.len() != length || output.iter().any(|value| !value.is_finite()) {
+        return Err(ErrorRepr::RunModel {
+            note: None,
+            source: anyhow!(
+                "predict_intonation returned nonfinite pitches or an invalid output length"
+            ),
+        }
+        .into());
+    }
+    Ok(output)
+}
+
+#[cfg(test)]
+#[test]
+fn rejects_nonfinite_or_wrong_length_pitch_output() {
+    assert!(finite_pitch(vec![f32::NAN], 1).is_err());
+    assert!(finite_pitch(vec![f32::INFINITY], 1).is_err());
+    assert!(finite_pitch(vec![f32::NEG_INFINITY], 1).is_err());
+    assert!(finite_pitch(vec![0.0], 2).is_err());
+    assert_eq!(finite_pitch(vec![0.0], 1).unwrap(), [0.0]);
 }
