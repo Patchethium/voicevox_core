@@ -10,6 +10,7 @@ fn prediction(
     session: Arc<async_lock::Mutex<ort::session::Session>>,
     speaker: i64,
     noise: Option<&[f32]>,
+    prefix: Option<(&[f32], &[i64])>,
 ) -> anyhow::Result<Vec<f32>> {
     let mut ctx = OnnxruntimeRunContext::from(session);
     ctx.push_input("length", ndarray::arr0(5_i64))?;
@@ -25,9 +26,10 @@ fn prediction(
     }
     ctx.push_input("speaker_id", ndarray::arr1(&[speaker]))?;
     if let Some(noise) = noise {
+        let (values, mask): (&[f32], &[i64]) = prefix.unwrap_or((&[0.0; 5], &[0_i64; 5]));
         ctx.push_input("azalea_pitch_noise", ndarray::arr1(noise))?;
-        ctx.push_input("azalea_pitch_prefix", ndarray::arr1(&[0.0_f32; 5]))?;
-        ctx.push_input("azalea_pitch_prefix_mask", ndarray::arr1(&[0_i64; 5]))?;
+        ctx.push_input("azalea_pitch_prefix", ndarray::arr1(values))?;
+        ctx.push_input("azalea_pitch_prefix_mask", ndarray::arr1(mask))?;
     }
     let output = blocking::Onnxruntime::run_blocking(ctx)?.remove(0);
     let OutputTensor::Float32(output) = output else {
@@ -43,8 +45,8 @@ fn compare(rt: &blocking::Onnxruntime, model: &ModelBytes, speaker: i64) -> anyh
     let bytes = export_and_transform(model)?;
     let transformation = started.elapsed();
     let transformed = Arc::new(rt.new_session(&ModelBytes::Onnx(bytes), options)?.0);
-    let original = prediction(base, speaker, None)?;
-    let zero = prediction(transformed.clone(), speaker, Some(&[0.0; 5]))?;
+    let original = prediction(base, speaker, None, None)?;
+    let zero = prediction(transformed.clone(), speaker, Some(&[0.0; 5]), None)?;
     // Level1 can fuse the new Add differently across ORT builds/CPU kernels.
     let max_error = original
         .iter()
@@ -60,6 +62,7 @@ fn compare(rt: &blocking::Onnxruntime, model: &ModelBytes, speaker: i64) -> anyh
         transformed.clone(),
         speaker,
         Some(&[0.0, 0.05, 0.0, 0.0, 0.0]),
+        None,
     )?;
     ensure!(impulse[0] == zero[0], "impulse changed earlier output");
     ensure!(
@@ -73,10 +76,40 @@ fn compare(rt: &blocking::Onnxruntime, model: &ModelBytes, speaker: i64) -> anyh
             .any(|(a, b)| (a - b).abs() > 1e-6),
         "no autoregressive propagation"
     );
+    // A fixed voiced prefix must be preserved exactly and still drive later steps.
+    let fixed_values = [0.0, 0.3, 0.0, 0.0, 0.0];
+    let fixed_mask = [0, 1, 0, 0, 0];
+    let fixed = prediction(
+        transformed.clone(),
+        speaker,
+        Some(&[0.0; 5]),
+        Some((&fixed_values, &fixed_mask)),
+    )?;
+    ensure!(fixed[0] == zero[0], "fixed prefix changed earlier output");
+    ensure!(
+        fixed[1] == fixed_values[1],
+        "fixed prefix was not preserved exactly"
+    );
+    ensure!(
+        fixed[2..]
+            .iter()
+            .zip(&zero[2..])
+            .any(|(a, b)| (a - b).abs() > 1e-6),
+        "fixed prefix did not propagate to later outputs"
+    );
+    ensure!(
+        prediction(
+            transformed.clone(),
+            speaker,
+            Some(&[0.0; 5]),
+            Some((&fixed_values, &fixed_mask))
+        )? == fixed,
+        "nondeterministic fixed-prefix inference"
+    );
     let started = Instant::now();
     for _ in 0..20 {
         ensure!(
-            prediction(transformed.clone(), speaker, Some(&[0.0; 5]))? == zero,
+            prediction(transformed.clone(), speaker, Some(&[0.0; 5]), None)? == zero,
             "nondeterministic legacy inference"
         );
     }
