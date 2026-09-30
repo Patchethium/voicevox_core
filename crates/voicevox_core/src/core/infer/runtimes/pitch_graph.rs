@@ -6,8 +6,10 @@ use onnx_protobuf::{
 };
 
 pub(super) const NOISE_INPUT: &str = "azalea_pitch_noise";
+pub(super) const PREFIX_INPUT: &str = "azalea_pitch_prefix";
+pub(super) const PREFIX_MASK_INPUT: &str = "azalea_pitch_prefix_mask";
 const MARKER: &str = "azalea.pitch_noise.version";
-const VERSION: &str = "1";
+const VERSION: &str = "2";
 
 pub(super) fn transform(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     let mut model = ModelProto::parse_from_bytes(bytes).context("parse exported pitch ONNX")?;
@@ -47,11 +49,15 @@ pub(super) fn transform(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
         .into(),
         ..Default::default()
     });
-    graph.input.push(ValueInfoProto {
-        name: NOISE_INPUT.into(),
-        type_: Some(ty).into(),
-        ..Default::default()
-    });
+    for (name, elem_type) in [(NOISE_INPUT, 1), (PREFIX_INPUT, 1), (PREFIX_MASK_INPUT, 7)] {
+        let mut ty = ty.clone();
+        ty.mut_tensor_type().elem_type = elem_type;
+        graph.input.push(ValueInfoProto {
+            name: name.into(),
+            type_: Some(ty).into(),
+            ..Default::default()
+        });
+    }
     model.metadata_props.push(StringStringEntryProto {
         key: MARKER.into(),
         value: VERSION.into(),
@@ -276,6 +282,10 @@ fn rewrite_loop(body: &mut GraphProto, index: usize) -> anyhow::Result<()> {
     let pitch = pitch.clone();
     let mean = format!("azalea_pitch_mean_{index}");
     let noise = format!("azalea_pitch_step_{index}");
+    let noisy = format!("azalea_pitch_noisy_{index}");
+    let prefix = format!("azalea_pitch_prefix_step_{index}");
+    let mask = format!("azalea_pitch_prefix_mask_step_{index}");
+    let mask_value = format!("azalea_pitch_prefix_mask_value_{index}");
     body.node[head_index].output[0] = mean.clone();
     body.node.splice(
         head_index + 1..head_index + 1,
@@ -289,6 +299,36 @@ fn rewrite_loop(body: &mut GraphProto, index: usize) -> anyhow::Result<()> {
             NodeProto {
                 op_type: "Add".into(),
                 input: vec![mean, noise],
+                output: vec![noisy.clone()],
+                ..Default::default()
+            },
+            NodeProto {
+                op_type: "Gather".into(),
+                input: vec![PREFIX_INPUT.into(), body.input[0].name.clone()],
+                output: vec![prefix.clone()],
+                ..Default::default()
+            },
+            NodeProto {
+                op_type: "Gather".into(),
+                input: vec![PREFIX_MASK_INPUT.into(), body.input[0].name.clone()],
+                output: vec![mask_value.clone()],
+                ..Default::default()
+            },
+            NodeProto {
+                op_type: "Cast".into(),
+                input: vec![mask_value],
+                output: vec![mask.clone()],
+                attribute: vec![onnx_protobuf::AttributeProto {
+                    name: "to".into(),
+                    type_: onnx_protobuf::attribute_proto::AttributeType::INT.into(),
+                    i: 9,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            NodeProto {
+                op_type: "Where".into(),
+                input: vec![mask, prefix, noisy],
                 output: vec![pitch],
                 ..Default::default()
             },
@@ -332,14 +372,24 @@ mod tests {
         assert_eq!(before.graph.initializer, after.graph.initializer);
         assert_eq!(before.opset_import, after.opset_import);
         assert_eq!(before.producer_name, after.producer_name);
-        assert_eq!(after.graph.input.last().unwrap().name, NOISE_INPUT);
+        assert_eq!(after.graph.input.last().unwrap().name, PREFIX_MASK_INPUT);
         let b = body(&mut after);
-        let add = producer(b, &b.output[1].name).unwrap();
+        let selected = producer(b, &b.output[1].name).unwrap();
+        assert_eq!(selected.op_type, "Where");
+        assert_eq!(
+            through(b, &selected.input[0], &["Cast"]).unwrap().input,
+            [PREFIX_MASK_INPUT, &b.input[0].name]
+        );
+        assert_eq!(
+            producer(b, &selected.input[1]).unwrap().input,
+            [PREFIX_INPUT, &b.input[0].name]
+        );
+        let add = producer(b, &selected.input[2]).unwrap();
         assert_eq!(add.op_type, "Add");
         assert_eq!(producer(b, &add.input[0]).unwrap().op_type, "Conv");
         assert_eq!(
             through(b, &b.output[3].name, &["Gather", "Gather"]).unwrap(),
-            add
+            selected
         );
         let gather = producer(b, &add.input[1]).unwrap();
         assert_eq!(gather.input, [NOISE_INPUT, &b.input[0].name]);

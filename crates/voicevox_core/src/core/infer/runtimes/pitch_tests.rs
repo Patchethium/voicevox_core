@@ -26,6 +26,8 @@ fn prediction(
     ctx.push_input("speaker_id", ndarray::arr1(&[speaker]))?;
     if let Some(noise) = noise {
         ctx.push_input("azalea_pitch_noise", ndarray::arr1(noise))?;
+        ctx.push_input("azalea_pitch_prefix", ndarray::arr1(&[0.0_f32; 5]))?;
+        ctx.push_input("azalea_pitch_prefix_mask", ndarray::arr1(&[0_i64; 5]))?;
     }
     let output = blocking::Onnxruntime::run_blocking(ctx)?.remove(0);
     let OutputTensor::Float32(output) = output else {
@@ -170,6 +172,115 @@ fn pitch_api_parity_preservation_and_legacy_determinism() -> anyhow::Result<()> 
     {
         assert_eq!(result?, noisy);
     }
+    let pitches = |phrases: &[crate::AccentPhrase]| -> Vec<f32> {
+        phrases
+            .iter()
+            .flat_map(|p| p.moras.iter().chain(p.pause_mora.iter()))
+            .map(|m| m.pitch)
+            .collect()
+    };
+    let original_pitches = pitches(&noisy);
+    assert_eq!(
+        synth.complete_mora_pitch(phrases, style, &[], options)?,
+        noisy
+    );
+    assert_eq!(
+        synth.complete_mora_pitch(phrases, style, &original_pitches, options)?,
+        noisy
+    );
+    for length in 0..=original_pitches.len() {
+        assert_eq!(
+            synth.complete_mora_pitch(phrases, style, &original_pitches[..length], options)?,
+            noisy
+        );
+    }
+    let mut prefix = original_pitches[..4].to_vec();
+    let edited = prefix.iter().rposition(|p| *p > 0.0).unwrap();
+    prefix[edited] += 0.3;
+    let completed = synth.complete_mora_pitch(phrases, style, &prefix, options)?;
+    assert_eq!(&pitches(&completed)[..prefix.len()], prefix.as_slice());
+    assert!(
+        pitches(&completed)[prefix.len()..]
+            .iter()
+            .zip(&original_pitches[prefix.len()..])
+            .any(|(a, b)| (a - b).abs() > 1e-6)
+    );
+    assert_eq!(
+        synth.complete_mora_pitch(phrases, style, &prefix, options)?,
+        completed
+    );
+    assert_eq!(
+        nonblocking
+            .complete_mora_pitch(phrases, style, &prefix, options)
+            .block_on()?,
+        completed
+    );
+    assert_ne!(
+        completed,
+        synth.complete_mora_pitch(
+            phrases,
+            style,
+            &prefix,
+            PitchNoiseOptions {
+                seed: 43,
+                ..options
+            }
+        )?
+    );
+    let deterministic =
+        synth.complete_mora_pitch(phrases, style, &prefix, PitchNoiseOptions::default())?;
+    assert_eq!(&pitches(&deterministic)[..prefix.len()], prefix.as_slice());
+    assert_eq!(
+        deterministic,
+        synth.complete_mora_pitch(
+            phrases,
+            style,
+            &prefix,
+            PitchNoiseOptions {
+                sigma: 0.0,
+                seed: 123
+            }
+        )?
+    );
+    if let Some(unvoiced) = original_pitches.iter().position(|p| *p == 0.0) {
+        let mut invalid = original_pitches[..=unvoiced].to_vec();
+        invalid[unvoiced] = 1.0;
+        assert!(
+            synth
+                .complete_mora_pitch(phrases, style, &invalid, options)
+                .is_err()
+        );
+    }
+    let mut restored = completed.clone();
+    for (new, old) in restored.iter_mut().zip(phrases) {
+        for (new, old) in new
+            .moras
+            .iter_mut()
+            .chain(new.pause_mora.iter_mut())
+            .zip(old.moras.iter().chain(old.pause_mora.iter()))
+        {
+            if old.pitch == 0.0 {
+                assert_eq!(new.pitch, 0.0);
+            }
+            new.pitch = old.pitch;
+        }
+    }
+    assert_eq!(restored, *phrases);
+    assert_eq!(synth.complete_mora_pitch(&[], style, &[], options)?, vec![]);
+    for invalid in [
+        vec![f32::NAN],
+        vec![f32::INFINITY],
+        vec![-1.0],
+        vec![0.0; original_pitches.len() + 1],
+    ] {
+        assert!(
+            synth
+                .complete_mora_pitch(phrases, StyleId::new(u32::MAX), &invalid, options)
+                .unwrap_err()
+                .to_string()
+                .contains("prefix")
+        );
+    }
     for sigma in [-1.0, f32::NAN, f32::INFINITY] {
         assert!(
             nonblocking
@@ -251,6 +362,8 @@ fn unsupported_pitch_does_not_register_partial_model() -> anyhow::Result<()> {
                 end_accent_phrase_list: ndarray::arr1(&[0, 0, 0, 1, 0]),
                 speaker_id: ndarray::arr1(&[0]),
                 azalea_pitch_noise: ndarray::arr1(&[0.0, 0.05, 0.0, 0.0, 0.0]),
+                azalea_pitch_prefix: ndarray::arr1(&[0.0; 5]),
+                azalea_pitch_prefix_mask: ndarray::arr1(&[0_i64; 5]),
             },
             (),
         )

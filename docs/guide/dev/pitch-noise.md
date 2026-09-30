@@ -20,6 +20,35 @@ version, including RNG dependencies. Bitwise inference equivalence across
 hardware or ONNX Runtime versions is not promised. Legacy query creation, TTS
 and low-level pitch inference always supply zeros.
 
+## Pitch completion
+
+Both blocking and nonblocking Rust synthesizers expose:
+
+```rust,ignore
+synthesizer.complete_mora_pitch(
+    &accent_phrases, style_id, &pitch_prefix, PitchNoiseOptions { sigma, seed },
+)
+```
+
+Accent phrases provide the complete phoneme sequence and required accent features.
+`pitch_prefix: &[f32]` supplies a contiguous prefix in flattened mora order,
+including each phrase's pause mora but excluding boundary silence. Pitches use
+natural-log units, matching `Mora::pitch`. Values must be finite and nonnegative;
+unvoiced and pause values must be zero. Oversized or invalid prefixes are errors.
+The returned accent phrases preserve prefix pitches exactly and complete the
+suffix autoregressively, preserving durations and every other non-pitch field.
+An empty prefix is identical to `replace_mora_pitch_with_noise`; a full prefix
+preserves all pitches.
+
+For interactive editing, collect pitches through the edited mora (inclusive)
+and call this API with the full accent-phrase sequence. Fixed voiced pitches
+replace the model's output inside its loop, so they condition later predictions.
+Unvoiced/pause outputs stay zero; their internal predictor feedback is left
+unchanged, as in existing pitch generation. Noise draws still consume positions
+for all voiced moras, including fixed prefix moras, so a seed retains the same
+suffix noise sequence when the prefix length changes. Noise is ignored at fixed
+steps. With sigma zero, completion is deterministic regardless of seed.
+
 ## Automatic loading and supported graphs
 
 Every talk and experimental-talk intonation session is transformed during
@@ -45,14 +74,17 @@ GRU/Conv predictor by connectivity rather than internal names:
 
 The new float32 `[length]` input, `azalea_pitch_noise`, is gathered at the Loop
 iteration index and added immediately after the Conv. Both feedback and output
-consume the sum. Weights, unrelated graph content and metadata are preserved by
+consume the selected pitch. Two additional `[length]` inputs provide padded
+float32 `azalea_pitch_prefix` values and int64 `azalea_pitch_prefix_mask` flags.
+A `Where` after the addition selects fixed prefix pitches for both output and
+feedback; a zero mask preserves the legacy/noise path. Weights, unrelated graph content and metadata are preserved by
 ONNX protobuf parsing/serialization. Final sessions use the normal inference
 settings and strict input/output signature checks.
 
 Missing, ambiguous or unsupported structures intentionally fail loading; there
 is no deterministic fallback that silently disables noise. Reserved tensor-name
 collisions and already-transformed models are rejected. Metadata key
-`azalea.pitch_noise.version=1` identifies this rewrite; unknown versions fail.
+`azalea.pitch_noise.version=2` identifies this rewrite; unknown versions fail.
 Model-load errors retain the VVM path and domain context, and no partial model
 is registered. A failed reload preserves the previous model.
 

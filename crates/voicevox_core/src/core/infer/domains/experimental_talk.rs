@@ -86,6 +86,8 @@ pub(crate) struct PredictIntonationInput {
     pub(crate) end_accent_phrase_list: Array1<i64>,
     pub(crate) speaker_id: Array1<i64>,
     pub(crate) azalea_pitch_noise: Array1<f32>,
+    pub(crate) azalea_pitch_prefix: Array1<f32>,
+    pub(crate) azalea_pitch_prefix_mask: Array1<i64>,
 }
 
 #[derive(InferenceOutputSignature)]

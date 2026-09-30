@@ -121,7 +121,10 @@ impl<A: infer::AsyncExt> Default for FrameSynthesisOptions<A> {
 }
 
 /// ハードウェアアクセラレーションモードを設定する設定値。
-#[cfg_attr(all(doc, not(feature = "specta")), doc(alias = "VoicevoxAccelerationMode"))]
+#[cfg_attr(
+    all(doc, not(feature = "specta")),
+    doc(alias = "VoicevoxAccelerationMode")
+)]
 #[expect(
     clippy::manual_non_exhaustive,
     reason = "バインディングを作るときはexhaustiveとして扱いたい"
@@ -635,6 +638,17 @@ trait AsInner {
         style_id: StyleId,
         options: PitchNoiseOptions,
     ) -> Result<Vec<AccentPhrase>> {
+        self.complete_mora_pitch(accent_phrases, style_id, &[], options)
+            .await
+    }
+
+    async fn complete_mora_pitch(
+        &self,
+        accent_phrases: &[AccentPhrase],
+        style_id: StyleId,
+        pitch_prefix: &[f32],
+        options: PitchNoiseOptions,
+    ) -> Result<Vec<AccentPhrase>> {
         options.validate()?;
         let accent_phrases = &accent_phrases
             .iter()
@@ -679,11 +693,12 @@ trait AsInner {
             end_accent_phrase_list.push(base_end_accent_phrase_list[vowel_index as usize]);
         }
 
-        let noise = options.sample(
-            vowel_phoneme_data_list
-                .iter()
-                .map(|vowel| !vowel.is_unvoiced()),
-        )?;
+        let voiced: Vec<_> = vowel_phoneme_data_list
+            .iter()
+            .map(|vowel| !vowel.is_unvoiced())
+            .collect();
+        let (prefix, prefix_mask) = crate::pitch_noise::prefix_inputs(pitch_prefix, &voiced)?;
+        let noise = options.sample(voiced)?;
         let mut f0_list = self
             .predict_intonation_with_noise(
                 vowel_phoneme_list.len(),
@@ -695,6 +710,8 @@ trait AsInner {
                 &end_accent_phrase_list,
                 style_id,
                 &noise,
+                &prefix,
+                &prefix_mask,
             )
             .await?;
 
@@ -1129,6 +1146,8 @@ trait AsInner {
             end_accent_phrase_vector,
             style_id,
             &vec![0.0; length],
+            &vec![0.0; length],
+            &vec![0; length],
         )
         .await
     }
@@ -1145,6 +1164,8 @@ trait AsInner {
         end_accent_phrase_vector: &[i64],
         style_id: StyleId,
         noise: &[f32],
+        prefix: &[f32],
+        prefix_mask: &[i64],
     ) -> Result<Vec<f32>> {
         let status = self.status().clone();
         let vowel_phoneme_vector = ndarray::arr1(vowel_phoneme_vector);
@@ -1164,6 +1185,8 @@ trait AsInner {
                 end_accent_phrase_vector,
                 style_id,
                 ndarray::arr1(noise),
+                ndarray::arr1(prefix),
+                ndarray::arr1(prefix_mask),
             )
             .await
     }
@@ -1316,6 +1339,8 @@ impl<R: InferenceRuntime> Status<R> {
         end_accent_phrase_vector: ndarray::Array1<i64>,
         style_id: StyleId,
         noise: ndarray::Array1<f32>,
+        prefix: ndarray::Array1<f32>,
+        prefix_mask: ndarray::Array1<i64>,
     ) -> Result<Vec<f32>> {
         // `TalkDomain`と`ExperimentalTalkDomain`の両方がある場合、`TalkDomain`を優先
         if self.contains_domain::<TalkDomain>(style_id) {
@@ -1333,6 +1358,8 @@ impl<R: InferenceRuntime> Status<R> {
                         end_accent_phrase_list: end_accent_phrase_vector,
                         speaker_id: ndarray::arr1(&[inner_voice_id.raw_id().into()]),
                         azalea_pitch_noise: noise,
+                        azalea_pitch_prefix: prefix,
+                        azalea_pitch_prefix_mask: prefix_mask,
                     },
                     A::LIGHT_INFERENCE_CANCELLABLE,
                 )
@@ -1354,6 +1381,8 @@ impl<R: InferenceRuntime> Status<R> {
                     end_accent_phrase_list: end_accent_phrase_vector,
                     speaker_id: ndarray::arr1(&[inner_voice_id.raw_id().into()]),
                     azalea_pitch_noise: noise,
+                    azalea_pitch_prefix: prefix,
+                    azalea_pitch_prefix_mask: prefix_mask,
                 },
                 A::LIGHT_INFERENCE_CANCELLABLE,
             )
@@ -1946,6 +1975,28 @@ pub(crate) mod blocking {
         ) -> crate::Result<Vec<AccentPhrase>> {
             self.0
                 .replace_mora_pitch_with_noise(accent_phrases, style_id, options)
+                .block_on()
+        }
+
+        /// Complete talk pitches after a fixed prefix using autoregressive feedback.
+        ///
+        /// `pitch_prefix` contains natural-log pitches in mora order, including pause
+        /// moras but excluding leading/trailing silence. Values must be finite and
+        /// nonnegative, and zero for unvoiced/pause moras. A prefix longer than the
+        /// mora sequence is rejected. Prefix pitches are preserved exactly; all
+        /// non-pitch fields are preserved. An empty prefix is equivalent to
+        /// [`Self::replace_mora_pitch_with_noise`]. Noise is applied only after the
+        /// prefix, retaining the full sequence's seeded sampling positions.
+        /// Unvoiced/pause outputs remain zero and retain their original predictor feedback.
+        pub fn complete_mora_pitch(
+            &self,
+            accent_phrases: &[AccentPhrase],
+            style_id: StyleId,
+            pitch_prefix: &[f32],
+            options: crate::PitchNoiseOptions,
+        ) -> crate::Result<Vec<AccentPhrase>> {
+            self.0
+                .complete_mora_pitch(accent_phrases, style_id, pitch_prefix, options)
                 .block_on()
         }
 
@@ -2890,6 +2941,28 @@ pub(crate) mod nonblocking {
         ) -> Result<Vec<AccentPhrase>> {
             self.0
                 .replace_mora_pitch_with_noise(accent_phrases, style_id, options)
+                .await
+        }
+
+        /// Complete talk pitches after a fixed prefix using autoregressive feedback.
+        ///
+        /// `pitch_prefix` contains natural-log pitches in mora order, including pause
+        /// moras but excluding leading/trailing silence. Values must be finite and
+        /// nonnegative, and zero for unvoiced/pause moras. A prefix longer than the
+        /// mora sequence is rejected. Prefix pitches are preserved exactly; all
+        /// non-pitch fields are preserved. An empty prefix is equivalent to
+        /// [`Self::replace_mora_pitch_with_noise`]. Noise is applied only after the
+        /// prefix, retaining the full sequence's seeded sampling positions.
+        /// Unvoiced/pause outputs remain zero and retain their original predictor feedback.
+        pub async fn complete_mora_pitch(
+            &self,
+            accent_phrases: &[AccentPhrase],
+            style_id: StyleId,
+            pitch_prefix: &[f32],
+            options: crate::PitchNoiseOptions,
+        ) -> Result<Vec<AccentPhrase>> {
+            self.0
+                .complete_mora_pitch(accent_phrases, style_id, pitch_prefix, options)
                 .await
         }
 

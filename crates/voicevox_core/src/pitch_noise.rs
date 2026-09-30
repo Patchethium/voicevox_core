@@ -58,6 +58,32 @@ impl PitchNoiseOptions {
     }
 }
 
+/// Build padded teacher-forcing inputs, leaving silence/unvoiced feedback unchanged.
+/// The public prefix excludes boundary silence, but includes pause moras.
+pub(crate) fn prefix_inputs(prefix: &[f32], voiced: &[bool]) -> Result<(Vec<f32>, Vec<i64>)> {
+    let invalid = |what| InvalidQueryError {
+        what,
+        value: None,
+        source: None,
+    };
+    if prefix.len() > voiced.len().saturating_sub(2) {
+        return Err(invalid("pitch prefix is longer than the mora sequence").into());
+    }
+    let mut values = vec![0.0; voiced.len()];
+    let mut mask = vec![0; voiced.len()];
+    for (i, &pitch) in prefix.iter().enumerate() {
+        if !pitch.is_finite() || pitch < 0.0 {
+            return Err(invalid("pitch prefix values must be finite and nonnegative").into());
+        }
+        if !voiced[i + 1] && pitch != 0.0 {
+            return Err(invalid("unvoiced and pause pitch prefix values must be zero").into());
+        }
+        values[i + 1] = pitch;
+        mask[i + 1] = i64::from(voiced[i + 1]);
+    }
+    Ok((values, mask))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
