@@ -910,8 +910,15 @@ mod tests {
 }
 
 fn export_and_transform(model: &ModelBytes) -> anyhow::Result<Vec<u8>> {
-    let directory = tempfile::tempdir().context("create temporary pitch export directory")?;
-    let path = directory.path().join("pitch.onnx");
+    super::pitch_graph::transform(&export_onnx(model, "pitch predictor")?)
+}
+
+/// Exports `model` as a self-contained, unoptimized ONNX model, decrypting VV-bin models
+/// through VOICEVOX ONNX Runtime. The file only lives in a private temporary directory.
+fn export_onnx(model: &ModelBytes, what: &str) -> anyhow::Result<Vec<u8>> {
+    let directory =
+        tempfile::tempdir().with_context(|| format!("create temporary {what} export directory"))?;
+    let path = directory.path().join("model.onnx");
     let mut builder = ort::session::Session::builder()?
         .with_optimization_level(GraphOptimizationLevel::Disable)
         .map_err(ort::Error::<()>::from)?
@@ -925,7 +932,7 @@ fn export_and_transform(model: &ModelBytes) -> anyhow::Result<Vec<u8>> {
         ModelBytes::VvBin(bytes) => {
             ensure!(
                 ort::info().starts_with("VOICEVOX ORT Build Info: "),
-                "pitch vv-bin export requires VOICEVOX ONNX Runtime"
+                "{what} vv-bin export requires VOICEVOX ONNX Runtime"
             );
             builder = builder
                 .with_config_entry("session.use_vv_bin", "1")
@@ -936,11 +943,26 @@ fn export_and_transform(model: &ModelBytes) -> anyhow::Result<Vec<u8>> {
     drop(
         builder
             .commit_from_memory(bytes)
-            .context("export pitch predictor on CPU")?,
+            .with_context(|| format!("export {what} on CPU"))?,
     );
-    super::pitch_graph::transform(&std::fs::read(&path).context("read exported pitch predictor")?)
+    std::fs::read(&path).with_context(|| format!("read exported {what}"))
+}
+
+/// Exports a monolithic talk decoder and splits it at the mel bottleneck.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "wired up by the split-talk domain")
+)]
+fn export_and_split_decoder(
+    model: &ModelBytes,
+) -> anyhow::Result<super::decoder_graph::SplitDecoder> {
+    super::decoder_graph::split(&export_onnx(model, "talk decoder")?)
 }
 
 #[cfg(test)]
 #[path = "pitch_tests.rs"]
 mod pitch_tests;
+
+#[cfg(test)]
+#[path = "decoder_tests.rs"]
+mod decoder_tests;
