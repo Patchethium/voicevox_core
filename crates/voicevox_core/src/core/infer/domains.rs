@@ -1,6 +1,7 @@
 pub(crate) mod experimental_talk;
 mod frame_decode;
 mod singing_teacher;
+pub(crate) mod split_talk;
 pub(crate) mod talk;
 
 use std::fmt::Debug;
@@ -19,6 +20,7 @@ pub(crate) use self::{
         PredictSingF0Output, PredictSingVolumeInput, PredictSingVolumeOutput, SingingTeacherDomain,
         SingingTeacherOperation,
     },
+    split_talk::{SplitTalkDomain, SplitTalkOperation},
     talk::{DecodeInput, DecodeOutput, TalkDomain, TalkOperation},
 };
 

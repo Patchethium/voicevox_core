@@ -29,6 +29,8 @@ use super::{
     voice_model::{ModelBytesWithInnerVoiceIdsByDomain, VoiceModelHeader, VoiceModelId},
 };
 
+mod split_talk;
+
 /// `Synthesizer::load_voice_model`の実行時に、同じ[`id`]の`VoiceModelFile`が既に読み込まれていたときのふるまい。
 ///
 /// [`id`]: VoiceModelId
@@ -82,7 +84,9 @@ impl<R: InferenceRuntime> Status<R> {
             .unwrap()
             .ensure_acceptable(model_header, on_existing)?;
 
-        let session_sets_with_inner_ids = model_contents
+        let _span =
+            tracing::info_span!("insert_model", path = %model_header.path.display()).entered();
+        let (session_sets_with_inner_ids, split_talk) = model_contents
             .create_session_sets(self.rt, &self.session_options)
             .map_err(|source| LoadModelError {
                 path: model_header.path.clone(),
@@ -93,6 +97,7 @@ impl<R: InferenceRuntime> Status<R> {
         self.loaded_models.lock().unwrap().insert(
             model_header,
             session_sets_with_inner_ids,
+            split_talk,
             on_existing,
         )?;
         Ok(())
@@ -177,9 +182,19 @@ impl<R: InferenceRuntime> Debug for LoadedModels<R> {
     }
 }
 
-struct LoadedModel<R: InferenceRuntime> {
+pub(crate) struct LoadedModel<R: InferenceRuntime> {
     metas: VoiceModelMeta,
     session_sets_with_inner_ids: InferenceDomainMap<SessionSetsWithInnerVoiceIdsByDomain<R>>,
+    /// Replaces `session_sets_with_inner_ids.talk` when its decoder could be split.
+    split_talk: split_talk::SessionSetWithInnerVoiceIds<R>,
+}
+
+impl<R: InferenceRuntime> LoadedModel<R> {
+    fn get<D: InferenceDomainExt>(
+        &self,
+    ) -> Option<&(StyleIdToInnerVoiceId, InferenceSessionSet<R, D>)> {
+        D::visit(self)
+    }
 }
 
 impl<R: InferenceRuntime> LoadedModels<R> {
@@ -191,24 +206,10 @@ impl<R: InferenceRuntime> LoadedModels<R> {
         &self,
         style_id: StyleId,
     ) -> Result<(VoiceModelId, InnerVoiceId)> {
-        let (
-            model_id,
-            LoadedModel {
-                session_sets_with_inner_ids,
-                ..
-            },
-        ) = self
+        let (model_id, model) = self
             .0
             .iter()
-            .filter(
-                |(
-                    _,
-                    LoadedModel {
-                        session_sets_with_inner_ids,
-                        ..
-                    },
-                )| D::visit(session_sets_with_inner_ids).is_some(),
-            )
+            .filter(|(_, model)| model.get::<D>().is_some())
             .find(|(_, LoadedModel { metas, .. })| {
                 metas
                     .iter()
@@ -220,7 +221,7 @@ impl<R: InferenceRuntime> LoadedModels<R> {
                 style_types: D::style_types(),
             })?;
 
-        let inner_voice_id = session_sets_with_inner_ids
+        let inner_voice_id = model
             .get::<D>()
             .as_ref()
             .and_then(|(inner_voice_ids, _)| inner_voice_ids.get(&style_id).copied())
@@ -241,7 +242,6 @@ impl<R: InferenceRuntime> LoadedModels<R> {
         <I::Signature as InferenceSignature>::Domain: InferenceDomainExt,
     {
         let (_, session_set) = self.0[&model_id]
-            .session_sets_with_inner_ids
             .get::<<I::Signature as InferenceSignature>::Domain>()
             .as_ref()
             .unwrap_or_else(|| {
@@ -266,15 +266,7 @@ impl<R: InferenceRuntime> LoadedModels<R> {
                     .flat_map(|CharacterMeta { styles, .. }| styles)
                     .any(|style| style.id == style_id && D::style_types().contains(&style.r#type))
             })
-            .and_then(
-                |(
-                    _,
-                    LoadedModel {
-                        session_sets_with_inner_ids,
-                        ..
-                    },
-                )| session_sets_with_inner_ids.get::<D>(),
-            )
+            .and_then(|(_, model)| model.get::<D>())
             .is_some()
     }
 
@@ -347,6 +339,7 @@ impl<R: InferenceRuntime> LoadedModels<R> {
         &mut self,
         model_header: &VoiceModelHeader,
         session_sets_with_inner_ids: InferenceDomainMap<SessionSetsWithInnerVoiceIdsByDomain<R>>,
+        split_talk: split_talk::SessionSetWithInnerVoiceIds<R>,
         on_existing: OnExistingVoiceModelId,
     ) -> Result<()> {
         self.ensure_acceptable(model_header, on_existing)?;
@@ -355,6 +348,7 @@ impl<R: InferenceRuntime> LoadedModels<R> {
         let model = LoadedModel {
             metas: model_header.metas.clone(),
             session_sets_with_inner_ids,
+            split_talk,
         };
 
         match entry {
@@ -394,7 +388,7 @@ impl<R: InferenceRuntime> LoadedModels<R> {
 
 pub(crate) trait InferenceDomainExt: InferenceDomain {
     fn visit<R: InferenceRuntime>(
-        map: &InferenceDomainMap<SessionSetsWithInnerVoiceIdsByDomain<R>>,
+        model: &LoadedModel<R>,
     ) -> Option<&(StyleIdToInnerVoiceId, InferenceSessionSet<R, Self>)>;
 }
 
@@ -407,17 +401,9 @@ pub(crate) trait InferenceDomainExt: InferenceDomain {
 )]
 impl InferenceDomainExt for T {
     fn visit<R: InferenceRuntime>(
-        map: &InferenceDomainMap<SessionSetsWithInnerVoiceIdsByDomain<R>>,
+        model: &LoadedModel<R>,
     ) -> Option<&(StyleIdToInnerVoiceId, InferenceSessionSet<R, Self>)> {
-        map.field.as_ref()
-    }
-}
-
-impl<R: InferenceRuntime> InferenceDomainMap<SessionSetsWithInnerVoiceIdsByDomain<R>> {
-    fn get<D: InferenceDomainExt>(
-        &self,
-    ) -> Option<&(StyleIdToInnerVoiceId, InferenceSessionSet<R, D>)> {
-        D::visit(self)
+        model.session_sets_with_inner_ids.field.as_ref()
     }
 }
 
@@ -426,17 +412,26 @@ impl InferenceDomainMap<ModelBytesWithInnerVoiceIdsByDomain> {
         &self,
         rt: &R,
         session_options: &InferenceDomainMap<SessionOptionsByDomain>,
-    ) -> anyhow::Result<InferenceDomainMap<SessionSetsWithInnerVoiceIdsByDomain<R>>> {
+    ) -> anyhow::Result<(
+        InferenceDomainMap<SessionSetsWithInnerVoiceIdsByDomain<R>>,
+        split_talk::SessionSetWithInnerVoiceIds<R>,
+    )> {
+        let split_talk = split_talk::create_session_set(rt, self, session_options);
+        // A split talk decoder replaces the talk domain.
+        let talk_models = if split_talk.is_some() {
+            &None
+        } else {
+            &self.talk
+        };
         duplicate! {
             [
-                field;
-                [ talk ];
-                [ experimental_talk ];
-                [ singing_teacher ];
-                [ frame_decode ];
+                field                 models;
+                [ talk ]              [ talk_models ];
+                [ experimental_talk ] [ (&self.experimental_talk) ];
+                [ singing_teacher ]   [ (&self.singing_teacher) ];
+                [ frame_decode ]      [ (&self.frame_decode) ];
             ]
-            let field = self
-                .field
+            let field = models
                 .as_ref()
                 .map(|(inner_voice_ids, model_bytes)| {
                     let session_set = InferenceSessionSet::new(rt, model_bytes, &session_options.field)?;
@@ -445,12 +440,15 @@ impl InferenceDomainMap<ModelBytesWithInnerVoiceIdsByDomain> {
                 .transpose()?;
         }
 
-        Ok(InferenceDomainMap {
-            talk,
-            experimental_talk,
-            singing_teacher,
-            frame_decode,
-        })
+        Ok((
+            InferenceDomainMap {
+                talk,
+                experimental_talk,
+                singing_teacher,
+                frame_decode,
+            },
+            split_talk,
+        ))
     }
 }
 

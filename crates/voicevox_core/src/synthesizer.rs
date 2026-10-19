@@ -39,7 +39,7 @@ use crate::{
                 PredictSingF0Input, PredictSingF0Output, PredictSingVolumeInput,
                 PredictSingVolumeOutput, RenderAudioSegmentInput, RenderAudioSegmentOutput,
                 SfDecodeInput, SfDecodeOutput, SingingTeacherDomain, SingingTeacherOperation,
-                TalkDomain, TalkOperation, experimental_talk, talk,
+                SplitTalkDomain, TalkDomain, TalkOperation, experimental_talk, talk,
             },
         },
         pad_decoder_feature,
@@ -193,6 +193,8 @@ impl AsyncExt for BlockingThreadPool {
 
 /// 音が途切れてしまうのを避けるworkaround処理のためのパディング幅（フレーム数）
 // TODO: Rust 1.90であれば`{float}::round`がそのまま使える
+mod split_talk;
+
 const PADDING_FRAME_LENGTH: usize = 38; // (0.4秒 * 24000Hz / 256.0).round()
 /// 音声生成の際、音声特徴量の前後に確保すべきマージン幅（フレーム数）
 /// モデルの受容野から計算される
@@ -1289,6 +1291,11 @@ impl<R: InferenceRuntime> Status<R> {
         phoneme_vector: ndarray::Array1<i64>,
         style_id: StyleId,
     ) -> Result<Vec<f32>> {
+        if self.contains_domain::<SplitTalkDomain>(style_id) {
+            return self
+                .split_talk_predict_duration::<A>(phoneme_vector, style_id)
+                .await;
+        }
         // `TalkDomain`と`ExperimentalTalkDomain`の両方がある場合、`TalkDomain`を優先
         if self.contains_domain::<TalkDomain>(style_id) {
             let (model_id, inner_voice_id) = self.ids_for::<TalkDomain>(style_id)?;
@@ -1342,6 +1349,23 @@ impl<R: InferenceRuntime> Status<R> {
         prefix: ndarray::Array1<f32>,
         prefix_mask: ndarray::Array1<i64>,
     ) -> Result<Vec<f32>> {
+        if self.contains_domain::<SplitTalkDomain>(style_id) {
+            return self
+                .split_talk_predict_intonation::<A>(
+                    length,
+                    vowel_phoneme_vector,
+                    consonant_phoneme_vector,
+                    start_accent_vector,
+                    end_accent_vector,
+                    start_accent_phrase_vector,
+                    end_accent_phrase_vector,
+                    style_id,
+                    noise,
+                    prefix,
+                    prefix_mask,
+                )
+                .await;
+        }
         // `TalkDomain`と`ExperimentalTalkDomain`の両方がある場合、`TalkDomain`を優先
         if self.contains_domain::<TalkDomain>(style_id) {
             let (model_id, inner_voice_id) = self.ids_for::<TalkDomain>(style_id)?;
@@ -1402,6 +1426,17 @@ impl<R: InferenceRuntime> Status<R> {
         phoneme_vector: ndarray::Array1<f32>,
         style_id: StyleId,
     ) -> Result<ndarray::Array2<f32>> {
+        if self.contains_domain::<SplitTalkDomain>(style_id) {
+            return self
+                .split_talk_generate_full_intermediate::<A>(
+                    length,
+                    phoneme_size,
+                    f0,
+                    phoneme_vector,
+                    style_id,
+                )
+                .await;
+        }
         let (model_id, inner_voice_id) = self.ids_for::<ExperimentalTalkDomain>(style_id)?;
 
         let (length_with_padding, f0_with_padding, phoneme_with_padding) =
@@ -1451,6 +1486,11 @@ impl<R: InferenceRuntime> Status<R> {
         spec: ndarray::Array2<f32>,
         style_id: StyleId,
     ) -> Result<ndarray::Array1<f32>> {
+        if self.contains_domain::<SplitTalkDomain>(style_id) {
+            return self
+                .split_talk_render_audio_segment::<A>(spec, style_id)
+                .await;
+        }
         let (model_id, _inner_voice_id) = self.ids_for::<ExperimentalTalkDomain>(style_id)?;
         let RenderAudioSegmentOutput { wave } = self
             .run_session::<A, _>(

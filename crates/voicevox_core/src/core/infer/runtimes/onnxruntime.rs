@@ -278,6 +278,19 @@ impl InferenceRuntime for self::blocking::Onnxruntime {
         .map_err(Into::into)
     }
 
+    fn split_talk_decoder(&self, model: &ModelBytes) -> anyhow::Result<Option<[ModelBytes; 2]>> {
+        let started = std::time::Instant::now();
+        let super::decoder_graph::SplitDecoder {
+            spectrogram,
+            vocoder,
+        } = export_and_split_decoder(model)?;
+        tracing::debug!(elapsed = ?started.elapsed(), "talk decoder split");
+        Ok(Some([
+            ModelBytes::Onnx(spectrogram),
+            ModelBytes::Onnx(vocoder),
+        ]))
+    }
+
     fn new_session(
         &self,
         model: &ModelBytes,
@@ -949,10 +962,6 @@ fn export_onnx(model: &ModelBytes, what: &str) -> anyhow::Result<Vec<u8>> {
 }
 
 /// Exports a monolithic talk decoder and splits it at the mel bottleneck.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired up by the split-talk domain")
-)]
 fn export_and_split_decoder(
     model: &ModelBytes,
 ) -> anyhow::Result<super::decoder_graph::SplitDecoder> {

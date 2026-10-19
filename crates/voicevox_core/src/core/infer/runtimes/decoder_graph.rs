@@ -18,10 +18,6 @@ const PART: &str = "azalea.decoder_split.part";
 const VERSION: &str = "1";
 
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired up by the split-talk domain")
-)]
 pub(super) struct SplitDecoder {
     /// `f0: f32[length, 1]`, `phoneme: f32[length, 45]`, `speaker_id: i64[1]` → `spec: f32[length, 80]`
     pub(super) spectrogram: Vec<u8>,

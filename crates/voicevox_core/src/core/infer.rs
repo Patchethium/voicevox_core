@@ -89,6 +89,12 @@ pub(crate) trait InferenceRuntime: 'static {
         Vec<ParamInfo<OutputScalarKind>>,
     )>;
 
+    /// Splits a monolithic talk decoder into `generate_full_intermediate` and
+    /// `render_audio_segment` models. `Ok(None)` means this runtime cannot split decoders.
+    fn split_talk_decoder(&self, _model: &ModelBytes) -> anyhow::Result<Option<[ModelBytes; 2]>> {
+        Ok(None)
+    }
+
     fn run_blocking(ctx: Self::RunContext) -> anyhow::Result<Vec<OutputTensor>>;
 
     async fn run_async(
