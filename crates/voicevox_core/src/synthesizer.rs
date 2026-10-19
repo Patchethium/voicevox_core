@@ -193,7 +193,7 @@ impl AsyncExt for BlockingThreadPool {
 
 /// 音が途切れてしまうのを避けるworkaround処理のためのパディング幅（フレーム数）
 // TODO: Rust 1.90であれば`{float}::round`がそのまま使える
-mod split_talk;
+pub(crate) mod split_talk;
 
 const PADDING_FRAME_LENGTH: usize = 38; // (0.4秒 * 24000Hz / 256.0).round()
 /// 音声生成の際、音声特徴量の前後に確保すべきマージン幅（フレーム数）

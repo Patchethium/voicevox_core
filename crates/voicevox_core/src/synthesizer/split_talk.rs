@@ -1,18 +1,226 @@
-//! Inference through [`SplitTalkDomain`] (`azalea` fork), mirroring the experimental-talk paths.
+//! Inference through [`SplitTalkDomain`] (`azalea` fork), mirroring the experimental-talk paths,
+//! and the fork's public streaming API on top of it.
+use std::ops::Range;
+
 use crate::{
-    Result, StyleId,
+    AudioQuery, Result, StyleId,
     core::{
         Array1ExtForPostProcess as _, ensure_minimum_phoneme_length,
         infer::{
             self, InferenceRuntime,
-            domains::{SplitTalkDomain, split_talk},
+            domains::{ExperimentalTalkDomain, SplitTalkDomain, split_talk},
         },
         pad_decoder_feature,
         status::Status,
     },
+    engine::{DEFAULT_SAMPLING_RATE, wav_from_s16le},
 };
 
-use super::{MARGIN, PADDING_FRAME_LENGTH, finite_pitch};
+use super::{
+    AsInner as _, AudioFeature, MARGIN, PADDING_FRAME_LENGTH, SynthesisOptions, finite_pitch,
+};
+
+/// Frames per second of [`StreamingAudio`]: one frame is 256 samples at 24 kHz.
+pub const STREAMING_FRAME_RATE: f64 = DEFAULT_SAMPLING_RATE as f64 / 256.0;
+
+/// Default chunk size for [`StreamingAudio::chunk_ranges`]. Chunks of at least this many
+/// frames have rendered bit-identically to whole-utterance rendering on production models.
+pub const DEFAULT_STREAMING_CHUNK_FRAMES: usize = 50;
+
+/// Options for preparing a [`StreamingAudio`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StreamingOptions {
+    /// Same as the synthesis option of the same name.
+    pub enable_interrogative_upspeak: bool,
+}
+
+impl Default for StreamingOptions {
+    fn default() -> Self {
+        Self {
+            enable_interrogative_upspeak: super::DEFAULT_ENABLE_INTERROGATIVE_UPSPEAK,
+        }
+    }
+}
+
+/// An utterance whose acoustic features are computed, ready to be rendered in frame ranges
+/// (`azalea` fork).
+///
+/// Create it with `prepare_streaming` and render it with `render_streaming` on the
+/// synthesizer that prepared it. Rendering every range of [`Self::chunk_ranges`] in order
+/// and concatenating the PCM gives the same audio as `synthesis` (without the WAV header).
+#[derive(Clone, PartialEq, Debug)]
+pub struct StreamingAudio {
+    feature: AudioFeature,
+    output_sampling_rate: u32,
+    output_stereo: bool,
+}
+
+impl StreamingAudio {
+    /// Number of frames, at [`STREAMING_FRAME_RATE`].
+    pub fn frame_length(&self) -> usize {
+        self.feature.frame_length
+    }
+
+    /// Duration in seconds.
+    pub fn duration_seconds(&self) -> f64 {
+        self.frame_length() as f64 / STREAMING_FRAME_RATE
+    }
+
+    /// Style the features were computed with.
+    pub fn style_id(&self) -> StyleId {
+        self.feature.style_id
+    }
+
+    /// Output sampling rate of the rendered PCM, from the audio query.
+    pub fn output_sampling_rate(&self) -> u32 {
+        self.output_sampling_rate
+    }
+
+    /// Whether the rendered PCM is stereo, from the audio query.
+    pub fn output_stereo(&self) -> bool {
+        self.output_stereo
+    }
+
+    /// Consecutive frame ranges of at most `chunk_frames` frames covering the utterance.
+    /// A `chunk_frames` of zero is treated as one.
+    pub fn chunk_ranges(&self, chunk_frames: usize) -> impl Iterator<Item = Range<usize>> + use<> {
+        let length = self.frame_length();
+        let chunk_frames = chunk_frames.max(1);
+        (0..length)
+            .step_by(chunk_frames)
+            .map(move |start| start..(start + chunk_frames).min(length))
+    }
+
+    /// Wraps rendered 16-bit little-endian PCM in a WAV header for this utterance's format.
+    pub fn wav(&self, pcm: &[u8]) -> Vec<u8> {
+        wav_from_s16le(pcm, self.output_sampling_rate, self.output_stereo)
+    }
+
+    /// `range` clamped to the utterance, so rendering never panics.
+    fn clamp(&self, range: Range<usize>) -> Range<usize> {
+        let end = range.end.min(self.frame_length());
+        range.start.min(end)..end
+    }
+}
+
+impl<T, A: super::AsyncExt> super::Inner<T, A> {
+    fn supports_streaming(&self, style_id: StyleId) -> bool {
+        let status = self.status();
+        status.contains_domain::<SplitTalkDomain>(style_id)
+            || status.contains_domain::<ExperimentalTalkDomain>(style_id)
+    }
+
+    async fn prepare_streaming(
+        &self,
+        audio_query: &AudioQuery,
+        style_id: StyleId,
+        options: StreamingOptions,
+    ) -> Result<StreamingAudio> {
+        let options = SynthesisOptions::<A> {
+            enable_interrogative_upspeak: options.enable_interrogative_upspeak,
+            ..Default::default()
+        };
+        let feature = self
+            .precompute_render(audio_query, style_id, &options)
+            .await?;
+        Ok(StreamingAudio {
+            feature,
+            output_sampling_rate: audio_query.output_sampling_rate,
+            output_stereo: audio_query.output_stereo,
+        })
+    }
+
+    async fn render_streaming(
+        &self,
+        audio: &StreamingAudio,
+        range: Range<usize>,
+    ) -> Result<Vec<u8>> {
+        self.render(&audio.feature, audio.clamp(range)).await
+    }
+}
+
+impl<T> super::blocking::Synthesizer<T> {
+    /// Whether `style_id` can be rendered in segments: its model has a split decoder,
+    /// either shipped natively or split while loading (`azalea` fork).
+    pub fn supports_streaming(&self, style_id: StyleId) -> bool {
+        self.0.supports_streaming(style_id)
+    }
+
+    /// Computes the acoustic features of a whole utterance for segmented rendering
+    /// (`azalea` fork). Most of the synthesis time is left to [`Self::render_streaming`].
+    ///
+    /// Fails when the style's model has no split decoder; see [`Self::supports_streaming`].
+    pub fn prepare_streaming(
+        &self,
+        audio_query: &AudioQuery,
+        style_id: StyleId,
+        options: StreamingOptions,
+    ) -> Result<StreamingAudio> {
+        use crate::future::FutureExt as _;
+        self.0
+            .prepare_streaming(audio_query, style_id, options)
+            .block_on()
+    }
+
+    /// Renders the frames in `range` as 16-bit little-endian PCM (`azalea` fork).
+    ///
+    /// `range` is clamped to the utterance; an empty range renders nothing. Each segment is
+    /// vocoded with surrounding context, so consecutive ranges join seamlessly.
+    pub fn render_streaming(&self, audio: &StreamingAudio, range: Range<usize>) -> Result<Vec<u8>> {
+        use crate::future::FutureExt as _;
+        self.0.render_streaming(audio, range).block_on()
+    }
+
+    /// Renders `audio` lazily in chunks of `chunk_frames` frames (`azalea` fork).
+    ///
+    /// See [`DEFAULT_STREAMING_CHUNK_FRAMES`] for a chunk size that keeps the output
+    /// identical to whole-utterance rendering.
+    pub fn render_streaming_chunks<'a>(
+        &'a self,
+        audio: &'a StreamingAudio,
+        chunk_frames: usize,
+    ) -> impl Iterator<Item = Result<Vec<u8>>> + 'a {
+        audio
+            .chunk_ranges(chunk_frames)
+            .map(move |range| self.render_streaming(audio, range))
+    }
+}
+
+impl<T> super::nonblocking::Synthesizer<T> {
+    /// Whether `style_id` can be rendered in segments: its model has a split decoder,
+    /// either shipped natively or split while loading (`azalea` fork).
+    pub fn supports_streaming(&self, style_id: StyleId) -> bool {
+        self.0.supports_streaming(style_id)
+    }
+
+    /// Computes the acoustic features of a whole utterance for segmented rendering
+    /// (`azalea` fork). Inference runs on the blocking thread pool.
+    ///
+    /// Fails when the style's model has no split decoder; see [`Self::supports_streaming`].
+    pub async fn prepare_streaming(
+        &self,
+        audio_query: &AudioQuery,
+        style_id: StyleId,
+        options: StreamingOptions,
+    ) -> Result<StreamingAudio> {
+        self.0
+            .prepare_streaming(audio_query, style_id, options)
+            .await
+    }
+
+    /// Renders the frames in `range` as 16-bit little-endian PCM (`azalea` fork).
+    /// Inference runs on the blocking thread pool; drop the future to stop streaming.
+    ///
+    /// `range` is clamped to the utterance; an empty range renders nothing. Each segment is
+    /// vocoded with surrounding context, so consecutive ranges join seamlessly.
+    pub async fn render_streaming(
+        &self,
+        audio: &StreamingAudio,
+        range: Range<usize>,
+    ) -> Result<Vec<u8>> {
+        self.0.render_streaming(audio, range).await
+    }
+}
 
 impl<R: InferenceRuntime> Status<R> {
     pub(super) async fn split_talk_predict_duration<A: infer::AsyncExt>(
@@ -158,7 +366,7 @@ mod tests {
         future::FutureExt as _,
     };
 
-    use super::{super::super::blocking::Onnxruntime, *};
+    use super::{super::super::blocking::Onnxruntime, super::AsInner as _, *};
 
     fn status() -> anyhow::Result<Status<Onnxruntime>> {
         let options = InferenceSessionOptions::new(1, DeviceSpec::Cpu);
@@ -332,6 +540,167 @@ mod tests {
         assert!(status.contains_domain::<TalkDomain>(style_id));
         assert!(!status.contains_domain::<SplitTalkDomain>(style_id));
         assert_eq!(decode(&status, style_id, 60)?.len(), 60 * 256);
+        Ok(())
+    }
+
+    /// The sample VVM without its native split decoder, so loading splits `talk.decode`.
+    fn talk_only_sample() -> anyhow::Result<(tempfile::TempDir, std::path::PathBuf)> {
+        use std::io::{Read as _, Write as _};
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("talk_only.vvm");
+        let source = std::fs::File::open(::test_util::SAMPLE_VOICE_MODEL_FILE_PATH)?;
+        let mut source = zip::ZipArchive::new(source)?;
+        let mut target = zip::ZipWriter::new(std::fs::File::create(&path)?);
+        for i in 0..source.len() {
+            let mut entry = source.by_index(i)?;
+            let name = entry.name().to_owned();
+            let mut bytes = vec![];
+            entry.read_to_end(&mut bytes)?;
+            if name == "manifest.json" {
+                let mut manifest = serde_json::from_slice::<serde_json::Value>(&bytes)?;
+                manifest
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("experimental_talk")
+                    .unwrap();
+                bytes = serde_json::to_vec(&manifest)?;
+            }
+            target.start_file(name, zip::write::FileOptions::default())?;
+            target.write_all(&bytes)?;
+        }
+        target.finish()?;
+        Ok((dir, path))
+    }
+
+    fn samples(pcm: &[u8]) -> Vec<i16> {
+        pcm.chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]))
+            .collect()
+    }
+
+    #[test]
+    fn streaming_api_matches_synthesis_for_split_talk() -> anyhow::Result<()> {
+        use crate::{AccelerationMode, blocking::Synthesizer};
+
+        let (_dir, path) = talk_only_sample()?;
+        let synthesizer = Synthesizer::builder(Onnxruntime::from_test_util_data()?)
+            .acceleration_mode(AccelerationMode::Cpu)
+            .cpu_num_threads(1)
+            .build()?;
+        let model = VoiceModelFile::open(&path)?;
+        let style_id = talk_style(&model);
+        assert!(!synthesizer.supports_streaming(style_id));
+        assert!(
+            synthesizer
+                .prepare_streaming(&Default::default(), style_id, Default::default())
+                .is_err()
+        );
+        synthesizer.load_voice_model(&model).perform()?;
+        assert!(
+            synthesizer
+                .0
+                .status()
+                .contains_domain::<SplitTalkDomain>(style_id)
+        );
+        assert!(synthesizer.supports_streaming(style_id));
+
+        let mut query =
+            synthesizer.create_audio_query_from_kana("テ'_スト、コンニチワ'", style_id)?;
+        // Per-sample PCM options must survive chunking.
+        query.output_sampling_rate = 48000;
+        query.output_stereo = true;
+        query.volume_scale = 0.8;
+        let wav = synthesizer.synthesis(&query, style_id).perform()?;
+
+        let audio = synthesizer.prepare_streaming(&query, style_id, Default::default())?;
+        assert_eq!(audio.style_id(), style_id);
+        assert_eq!(audio.output_sampling_rate(), 48000);
+        assert!(audio.output_stereo());
+        let pcm = synthesizer
+            .render_streaming_chunks(&audio, crate::DEFAULT_STREAMING_CHUNK_FRAMES)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        let streamed = audio.wav(&pcm);
+        assert_eq!(streamed.len(), wav.len());
+        assert_eq!(streamed[..44], wav[..44], "WAV header");
+        // Up to one int16 step of rounding for kernel differences between segment lengths.
+        let difference = samples(&streamed[44..])
+            .into_iter()
+            .zip(samples(&wav[44..]))
+            .map(|(a, b)| (i32::from(a) - i32::from(b)).abs())
+            .max()
+            .unwrap();
+        assert!(difference <= 1, "streamed PCM differs by {difference}");
+        let bytes_per_frame = 256 * 2 * 2 * 2;
+        assert_eq!(pcm.len(), audio.frame_length() * bytes_per_frame);
+        assert!((audio.duration_seconds() - audio.frame_length() as f64 / 93.75).abs() < 1e-9);
+
+        // Ranges are clamped instead of panicking.
+        let length = audio.frame_length();
+        let tail = synthesizer.render_streaming(&audio, length - 10..length + 100)?;
+        assert_eq!(tail, pcm[(length - 10) * bytes_per_frame..]);
+        let inverted = Range { start: 5, end: 3 };
+        assert!(synthesizer.render_streaming(&audio, inverted)?.is_empty());
+        assert!(
+            synthesizer
+                .render_streaming(&audio, length + 5..length + 9)?
+                .is_empty()
+        );
+
+        let ranges = audio.chunk_ranges(7).collect::<Vec<_>>();
+        assert_eq!(ranges.first().unwrap().start, 0);
+        assert_eq!(ranges.last().unwrap().end, length);
+        assert!(ranges.windows(2).all(|w| w[0].end == w[1].start));
+        assert!(ranges.iter().all(|r| (1..=7).contains(&r.len())));
+        assert_eq!(audio.chunk_ranges(0).count(), length);
+
+        // The nonblocking synthesizer renders the same chunks.
+        let nonblocking = crate::nonblocking::Synthesizer::builder(
+            crate::nonblocking::Onnxruntime::get().unwrap(),
+        )
+        .acceleration_mode(AccelerationMode::Cpu)
+        .cpu_num_threads(1)
+        .build()?;
+        let model = crate::nonblocking::VoiceModelFile::open(&path).block_on()?;
+        nonblocking.load_voice_model(&model).perform().block_on()?;
+        assert!(nonblocking.supports_streaming(style_id));
+        let audio = nonblocking
+            .prepare_streaming(&query, style_id, Default::default())
+            .block_on()?;
+        let mut nonblocking_pcm = vec![];
+        for range in audio.chunk_ranges(crate::DEFAULT_STREAMING_CHUNK_FRAMES) {
+            nonblocking_pcm.extend(nonblocking.render_streaming(&audio, range).block_on()?);
+        }
+        assert_eq!(nonblocking_pcm, pcm);
+        Ok(())
+    }
+
+    /// Models with a native split decoder stream through it as before.
+    #[test]
+    fn streaming_api_uses_native_split_decoder() -> anyhow::Result<()> {
+        use crate::{AccelerationMode, blocking::Synthesizer};
+
+        let synthesizer = Synthesizer::builder(Onnxruntime::from_test_util_data()?)
+            .acceleration_mode(AccelerationMode::Cpu)
+            .cpu_num_threads(1)
+            .build()?;
+        let model = VoiceModelFile::open(::test_util::SAMPLE_VOICE_MODEL_FILE_PATH)?;
+        let style_id = talk_style(&model);
+        synthesizer.load_voice_model(&model).perform()?;
+        assert!(
+            !synthesizer
+                .0
+                .status()
+                .contains_domain::<SplitTalkDomain>(style_id)
+        );
+        assert!(synthesizer.supports_streaming(style_id));
+        let query = synthesizer.create_audio_query_from_kana("コンニチワ'", style_id)?;
+        let audio = synthesizer.prepare_streaming(&query, style_id, Default::default())?;
+        let pcm = synthesizer
+            .render_streaming_chunks(&audio, crate::DEFAULT_STREAMING_CHUNK_FRAMES)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        assert_eq!(pcm.len(), audio.frame_length() * 256 * 2);
         Ok(())
     }
 }

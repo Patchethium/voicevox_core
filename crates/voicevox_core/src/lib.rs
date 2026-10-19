@@ -493,3 +493,8 @@ pub use self::{
 // https://github.com/VOICEVOX/voicevox_core/issues/970
 #[doc(hidden)]
 pub use self::engine::wav_from_s16le as __wav_from_s16le;
+
+// `azalea` fork: segmented rendering for streaming synthesis.
+pub use self::synthesizer::split_talk::{
+    DEFAULT_STREAMING_CHUNK_FRAMES, STREAMING_FRAME_RATE, StreamingAudio, StreamingOptions,
+};

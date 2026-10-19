@@ -89,6 +89,7 @@ rstest_reuse.workspace = true
 test_util.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 voicevox_core = { workspace = true, features = ["buildtime-download-onnxruntime"] }
+zip.workspace = true
 
 [build-dependencies]
 voicevox_core_build_features.workspace = true
