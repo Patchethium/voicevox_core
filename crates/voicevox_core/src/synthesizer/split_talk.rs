@@ -1,4 +1,4 @@
-//! Inference through [`SplitTalkDomain`] (`azalea` fork), mirroring the experimental-talk paths,
+//! Inference through [`SplitTalkDomain`] (`azalea` fork), mirroring the streaming-talk paths,
 //! and the fork's public streaming API on top of it.
 use std::ops::Range;
 
@@ -8,20 +8,21 @@ use crate::{
         Array1ExtForPostProcess as _, ensure_minimum_phoneme_length,
         infer::{
             self, InferenceRuntime,
-            domains::{ExperimentalTalkDomain, SplitTalkDomain, split_talk},
+            domains::{SplitTalkDomain, StreamingTalkDomain, split_talk},
         },
         pad_decoder_feature,
         status::Status,
     },
-    engine::{DEFAULT_SAMPLING_RATE, wav_from_s16le},
+    engine::wav_from_s16le,
+    frame::FRAME_RATE,
 };
 
-use super::{
-    AsInner as _, AudioFeature, MARGIN, PADDING_FRAME_LENGTH, SynthesisOptions, finite_pitch,
-};
+use typed_floats::{NonNaNFinite, PositiveFinite};
+
+use super::{AsInner as _, AudioFeature, SynthesisOptions, finish_intermediate, finite_pitch};
 
 /// Frames per second of [`StreamingAudio`]: one frame is 256 samples at 24 kHz.
-pub const STREAMING_FRAME_RATE: f64 = DEFAULT_SAMPLING_RATE as f64 / 256.0;
+pub const STREAMING_FRAME_RATE: f64 = FRAME_RATE;
 
 /// Default chunk size for [`StreamingAudio::chunk_ranges`]. Chunks of at least this many
 /// frames have rendered bit-identically to whole-utterance rendering on production models.
@@ -58,7 +59,7 @@ pub struct StreamingAudio {
 impl StreamingAudio {
     /// Number of frames, at [`STREAMING_FRAME_RATE`].
     pub fn frame_length(&self) -> usize {
-        self.feature.frame_length
+        self.feature.len()
     }
 
     /// Duration in seconds.
@@ -68,7 +69,7 @@ impl StreamingAudio {
 
     /// Style the features were computed with.
     pub fn style_id(&self) -> StyleId {
-        self.feature.style_id
+        self.feature.slice(..).style_id()
     }
 
     /// Output sampling rate of the rendered PCM, from the audio query.
@@ -107,7 +108,7 @@ impl<T, A: super::AsyncExt> super::Inner<T, A> {
     fn supports_streaming(&self, style_id: StyleId) -> bool {
         let status = self.status();
         status.contains_domain::<SplitTalkDomain>(style_id)
-            || status.contains_domain::<ExperimentalTalkDomain>(style_id)
+            || status.contains_domain::<StreamingTalkDomain>(style_id)
     }
 
     async fn prepare_streaming(
@@ -121,11 +122,11 @@ impl<T, A: super::AsyncExt> super::Inner<T, A> {
             ..Default::default()
         };
         let feature = self
-            .precompute_render(audio_query, style_id, &options)
+            .create_audio_feature(audio_query, style_id, &options)
             .await?;
         Ok(StreamingAudio {
             feature,
-            output_sampling_rate: audio_query.output_sampling_rate,
+            output_sampling_rate: audio_query.output_sampling_rate.get().get(),
             output_stereo: audio_query.output_stereo,
         })
     }
@@ -135,7 +136,11 @@ impl<T, A: super::AsyncExt> super::Inner<T, A> {
         audio: &StreamingAudio,
         range: Range<usize>,
     ) -> Result<Vec<u8>> {
-        self.render(&audio.feature, audio.clamp(range)).await
+        let range = audio.clamp(range);
+        if range.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.render(audio.feature.slice(range)).await
     }
 }
 
@@ -227,7 +232,7 @@ impl<R: InferenceRuntime> Status<R> {
         &self,
         phoneme_vector: ndarray::Array1<i64>,
         style_id: StyleId,
-    ) -> Result<Vec<f32>> {
+    ) -> Result<Vec<PositiveFinite<f32>>> {
         let (model_id, inner_voice_id) = self.ids_for::<SplitTalkDomain>(style_id)?;
         let split_talk::PredictDurationOutput {
             phoneme_length: output,
@@ -241,7 +246,10 @@ impl<R: InferenceRuntime> Status<R> {
                 A::LIGHT_INFERENCE_CANCELLABLE,
             )
             .await?;
-        Ok(ensure_minimum_phoneme_length(output.into_vec()))
+        let output = crate::core::ensure_non_nan_finite(&output.into_vec(), |invalid| {
+            anyhow::anyhow!("`predict_duration` returned an array that contains: {invalid}")
+        })?;
+        Ok(ensure_minimum_phoneme_length(output))
     }
 
     #[expect(
@@ -261,7 +269,7 @@ impl<R: InferenceRuntime> Status<R> {
         noise: ndarray::Array1<f32>,
         prefix: ndarray::Array1<f32>,
         prefix_mask: ndarray::Array1<i64>,
-    ) -> Result<Vec<f32>> {
+    ) -> Result<Vec<NonNaNFinite<f32>>> {
         let (model_id, inner_voice_id) = self.ids_for::<SplitTalkDomain>(style_id)?;
         let split_talk::PredictIntonationOutput { f0_list: output } = self
             .run_session::<A, _>(
@@ -294,15 +302,15 @@ impl<R: InferenceRuntime> Status<R> {
         f0: ndarray::Array1<f32>,
         phoneme_vector: ndarray::Array1<f32>,
         style_id: StyleId,
-    ) -> Result<ndarray::Array2<f32>> {
+    ) -> Result<Box<[[f32; crate::dim::AUDIO_FEATURE_BINS]]>> {
         let (model_id, inner_voice_id) = self.ids_for::<SplitTalkDomain>(style_id)?;
-        let (length_with_padding, f0_with_padding, phoneme_with_padding) =
-            pad_decoder_feature::<PADDING_FRAME_LENGTH>(
-                f0,
-                phoneme_vector
-                    .into_shape_with_order([length, phoneme_size])
-                    .unwrap(),
-            );
+        let (length_with_padding, f0_with_padding, phoneme_with_padding) = pad_decoder_feature(
+            f0,
+            phoneme_vector
+                .into_shape_with_order([length, phoneme_size])
+                .unwrap(),
+        );
+        let f0_with_padding_len = f0_with_padding.len();
         let split_talk::GenerateFullIntermediateOutput {
             spec: spec_with_padding,
         } = self
@@ -318,14 +326,7 @@ impl<R: InferenceRuntime> Status<R> {
                 A::LIGHT_INFERENCE_CANCELLABLE,
             )
             .await?;
-        const _: () = assert!(MARGIN <= PADDING_FRAME_LENGTH);
-        Ok(spec_with_padding
-            .slice(ndarray::s![
-                PADDING_FRAME_LENGTH - MARGIN
-                    ..spec_with_padding.nrows() - PADDING_FRAME_LENGTH + MARGIN,
-                ..
-            ])
-            .to_owned())
+        finish_intermediate(spec_with_padding, f0_with_padding_len)
     }
 
     pub(super) async fn split_talk_render_audio_segment<A: infer::AsyncExt>(
@@ -347,6 +348,7 @@ impl<R: InferenceRuntime> Status<R> {
 
 #[cfg(test)]
 mod tests {
+    use crate::core::adjust::MARGIN;
     use enum_map::enum_map;
     use onnx_protobuf::{Message as _, ModelProto, NodeProto};
 
@@ -374,7 +376,7 @@ mod tests {
             Onnxruntime::from_test_util_data()?,
             InferenceDomainMap {
                 talk: enum_map! { _ => options },
-                experimental_talk: enum_map! { _ => options },
+                streaming_talk: enum_map! { _ => options },
                 singing_teacher: enum_map! { _ => options },
                 frame_decode: enum_map! { _ => options },
             },
@@ -386,7 +388,7 @@ mod tests {
             .metas()
             .iter()
             .flat_map(|c| &c.styles)
-            .find(|s| s.r#type == StyleType::Talk)
+            .find(|s| s.id == StyleId(303) && s.r#type == StyleType::Talk)
             .unwrap()
             .id
     }
@@ -443,7 +445,7 @@ mod tests {
 
         let split = status()?;
         let mut contents = model.inner().read_inference_models().block_on()?;
-        contents.experimental_talk = None;
+        contents.streaming_talk = None;
         split.insert_model(model.inner().header(), &contents, Default::default())?;
         assert!(split.contains_domain::<SplitTalkDomain>(style_id));
         assert!(!split.contains_domain::<TalkDomain>(style_id));
@@ -476,13 +478,11 @@ mod tests {
                 style_id,
             )
             .block_on()?;
-        assert_eq!(spec.nrows(), length + 2 * MARGIN);
+        assert_eq!(spec.len(), length + 2 * MARGIN);
         let mut streamed = vec![];
         for start in (0..length).step_by(50) {
             let end = (start + 50).min(length);
-            let segment = spec
-                .slice(ndarray::s![start..end + 2 * MARGIN, ..])
-                .to_owned();
+            let segment = ndarray::ArrayView2::from(&spec[start..end + 2 * MARGIN]).to_owned();
             let wave = split
                 .render_audio_segment::<SingleTasked>(segment, style_id)
                 .block_on()?;
@@ -501,7 +501,7 @@ mod tests {
         let model = VoiceModelFile::open(::test_util::SAMPLE_VOICE_MODEL_FILE_PATH)?;
         let style_id = talk_style(&model);
         let mut contents = model.inner().read_inference_models().block_on()?;
-        contents.experimental_talk = None;
+        contents.streaming_talk = None;
         let (_, models) = contents.talk.as_mut().unwrap();
         let ModelBytes::Onnx(bytes) = &models[TalkOperation::Decode] else {
             panic!("sample decoder should be ONNX");
@@ -561,9 +561,20 @@ mod tests {
                 manifest
                     .as_object_mut()
                     .unwrap()
-                    .remove("experimental_talk")
+                    .remove("streaming_talk")
                     .unwrap();
                 bytes = serde_json::to_vec(&manifest)?;
+            }
+            if name == "metas.json" {
+                let mut metas = serde_json::from_slice::<serde_json::Value>(&bytes)?;
+                for character in metas.as_array_mut().unwrap() {
+                    for style in character["styles"].as_array_mut().unwrap() {
+                        if style["type"] == "streaming_talk" {
+                            style["type"] = "talk".into();
+                        }
+                    }
+                }
+                bytes = serde_json::to_vec(&metas)?;
             }
             target.start_file(name, zip::write::FileOptions::default())?;
             target.write_all(&bytes)?;
@@ -607,9 +618,9 @@ mod tests {
         let mut query =
             synthesizer.create_audio_query_from_kana("テ'_スト、コンニチワ'", style_id)?;
         // Per-sample PCM options must survive chunking.
-        query.output_sampling_rate = 48000;
+        query.output_sampling_rate = crate::SamplingRate::new(48000)?;
         query.output_stereo = true;
-        query.volume_scale = 0.8;
+        query.volume_scale = 0.8.try_into().unwrap();
         let wav = synthesizer.synthesis(&query, style_id).perform()?;
 
         let audio = synthesizer.prepare_streaming(&query, style_id, Default::default())?;
@@ -620,6 +631,22 @@ mod tests {
             .render_streaming_chunks(&audio, crate::DEFAULT_STREAMING_CHUNK_FRAMES)
             .collect::<Result<Vec<_>>>()?
             .concat();
+        // Upstream's lazy API and audio-feature slices must use the same split domain.
+        let upstream_wav = synthesizer
+            .streaming_synthesis(&query, style_id)
+            .segment_length(crate::DEFAULT_STREAMING_CHUNK_FRAMES as f64 / FRAME_RATE)
+            .perform()?
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        assert_eq!(upstream_wav, audio.wav(&pcm));
+        let feature = synthesizer
+            .create_audio_feature(&query, style_id)
+            .perform()?;
+        assert_eq!(feature.len(), audio.frame_length());
+        assert_eq!(
+            synthesizer.render(feature.slice(..))?,
+            synthesizer.render_streaming(&audio, 0..audio.frame_length())?
+        );
         let streamed = audio.wav(&pcm);
         assert_eq!(streamed.len(), wav.len());
         assert_eq!(streamed[..44], wav[..44], "WAV header");
@@ -672,6 +699,16 @@ mod tests {
             nonblocking_pcm.extend(nonblocking.render_streaming(&audio, range).block_on()?);
         }
         assert_eq!(nonblocking_pcm, pcm);
+        use futures_util::TryStreamExt as _;
+        let upstream_wav = nonblocking
+            .streaming_synthesis(&query, style_id)
+            .segment_length(crate::DEFAULT_STREAMING_CHUNK_FRAMES as f64 / FRAME_RATE)
+            .perform()
+            .block_on()?
+            .try_collect::<Vec<_>>()
+            .block_on()?
+            .concat();
+        assert_eq!(upstream_wav, audio.wav(&pcm));
         Ok(())
     }
 
@@ -685,7 +722,7 @@ mod tests {
             .cpu_num_threads(1)
             .build()?;
         let model = VoiceModelFile::open(::test_util::SAMPLE_VOICE_MODEL_FILE_PATH)?;
-        let style_id = talk_style(&model);
+        let style_id = StyleId(302);
         synthesizer.load_voice_model(&model).perform()?;
         assert!(
             !synthesizer

@@ -110,7 +110,13 @@ impl assert_cdylib::TestCase for TestCase {
         };
 
         // SAFETY: `voicevox_synthesizer_load_voice_model` has no safety requirements.
-        assert_ok(unsafe { lib.voicevox_synthesizer_load_voice_model(synthesizer, model) });
+        assert_ok(unsafe {
+            lib.voicevox_synthesizer_load_voice_model(
+                synthesizer,
+                model,
+                lib.voicevox_make_default_load_voice_model_options(),
+            )
+        });
 
         let metas_json = {
             // SAFETY: `voicevox_synthesizer_create_metas_json` has no safety requirements.
@@ -124,7 +130,7 @@ impl assert_cdylib::TestCase for TestCase {
             let metas_json = serde_json::to_string_pretty(metas_json).unwrap();
 
             // SAFETY: `raw` is valid and is no longer used.
-            unsafe { lib.voicevox_json_free(raw) }
+            unsafe { lib.voicevox_string_free(raw) }
 
             metas_json
         };
@@ -146,7 +152,7 @@ impl assert_cdylib::TestCase for TestCase {
     fn assert_output(&self, output: Utf8Output) -> AssertResult {
         output
             .mask_timestamps()
-            .mask_onnxruntime_filename()
+            .mask_unix_onnxruntime_filename()
             .mask_windows_video_cards()
             .assert()
             .try_success()?

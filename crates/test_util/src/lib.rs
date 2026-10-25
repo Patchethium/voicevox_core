@@ -13,6 +13,7 @@ include!(concat!(env!("OUT_DIR"), "/sample_voice_model_file.rs"));
     reason = "bindgenが生成するコードのため。`#[expect]`ではなく`#[allow]`なのは、bindgenが生成\
               するコードがOSにより変わるため"
 )]
+#[cfg(feature = "c-api")]
 pub mod c_api {
     include!(concat!(env!("OUT_DIR"), "/c_api.rs"));
 
@@ -25,42 +26,8 @@ use std::sync::LazyLock;
 pub use self::typing::{
     DecodeExampleData, DurationExampleData, ExampleData, IntonationExampleData,
 };
-
-pub const ONNXRUNTIME_DYLIB_PATH: &str = {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    macro_rules! version {
-        () => {
-            include_str!("../../../onnxruntime-version.txt")
-        };
-    }
-
-    #[cfg(target_os = "windows")]
-    macro_rules! lib_versioned_filename {
-        () => {
-            "onnxruntime.dll"
-        };
-    }
-
-    #[cfg(target_os = "linux")]
-    macro_rules! lib_versioned_filename {
-        () => {
-            concat!("libonnxruntime.so.", version!())
-        };
-    }
-
-    #[cfg(target_os = "macos")]
-    macro_rules! lib_versioned_filename {
-        () => {
-            concat!("libonnxruntime.", version!(), ".dylib")
-        };
-    }
-
-    concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../target/voicevox_core/downloads/onnxruntime/",
-        lib_versioned_filename!(),
-    )
-};
+pub const ONNXRUNTIME_DYLIB_PATH: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/onnxruntime-dylib-path.txt"));
 
 pub const OPEN_JTALK_DIC_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),

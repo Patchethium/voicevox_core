@@ -6,14 +6,14 @@
 //!   Runtimeのバイナリをダウンロードしてtarget
 //!   directory内の複数箇所に配置する。`VVCORE_BUILD_DOWNLOAD_AND_COPY_ORT`が`1`ではないなら警告を出して何もしない。後述の`link-onnxruntime`フィーチャと合わせると、システムにONNX Runtimeが無くてもビルドが可能になる。
 //! - **`load-onnxruntime`**: ONNX Runtimeを`dlopen`/`LoadLibraryExW`で開く。[CUDA]と[DirectML]が利用可能。
+//!   またmuslをターゲットとしたビルドでは`dlopen`をサポートしないため、このフラグは利用不可であるため、`link-onnxruntime`を利用する必要がある。
 //! - **`link-onnxruntime`**: ONNX Runtimeをロード時動的リンクする。そのためビルドするためにはシステムにONNX
 //!   Runtimeがインストールされているか、`buildtime-download-onnxruntime`によるダウンロードを行う必要がある。iOSのような`dlopen`の利用が困難な環境でのみこちらを利用するべきである。_Note_:
 //!   [動的リンク対象のライブラリ名]は`onnxruntime`で固定。変更は`patchelf(1)`や`install_name_tool(1)`で行うこと。また、[ONNX RuntimeのGPU機能]を使うことは不可。
-//! - **`specta`**: [`specta`](https://crates.io/crates/specta)クレートを利用して型情報を生成する。`tauri_specta`などの他のクレートと組み合わせて利用することを想定している。  
-//!   _WARNING_: 2.0.0-rc.4以降で導入されたフィーチャであり、1.x系とは互換性がない。
-//! 
 //!
 //! このクレートの利用にあたっては上記の`load-onnxruntime`か`link-onnxruntime`のうちどちらかを有効にしなければならない。両方の有効化はコンパイルエラーとなる。[`Onnxruntime`]の初期化方法はこれらのフィーチャによって決まる。
+//!
+//! The `specta` feature enables type export through `specta` 2.0.0-rc.22.
 //!
 //! # Build time environment variables
 //!
@@ -48,7 +48,7 @@
 //! # #[cfg(false)]
 //! const VVORT: &str = concatcp!(
 //!     "./voicevox_core/onnxruntime/lib/",
-//!     Onnxruntime::LIB_VERSIONED_FILENAME,
+//!     Onnxruntime::LIB_RECOMMENDED_VERSIONED_FILENAME,
 //! );
 //! # use test_util::ONNXRUNTIME_DYLIB_PATH as VVORT;
 //!
@@ -71,6 +71,9 @@
 //! # const TARGET_STYLE_NAME: &str = "style1";
 //! #
 //! const TEXT: &str = "こんにちは";
+//!
+//! # #[cfg(false)]
+//! tracing_subscriber::fmt().init(); // `voicevox_core`や(VOICEVOX) ONNX Runtimeの情報表示や警告は、`tracing`に出力される。
 //!
 //! let synth = {
 //!     let ort = Onnxruntime::load_once().filename(VVORT).perform()?;
@@ -131,7 +134,7 @@
 //! # #[cfg(false)]
 //! const VVORT: &str = concatcp!(
 //!     "./voicevox_core/onnxruntime/lib/",
-//!     Onnxruntime::LIB_VERSIONED_FILENAME,
+//!     Onnxruntime::LIB_RECOMMENDED_VERSIONED_FILENAME,
 //! );
 //! # use test_util::ONNXRUNTIME_DYLIB_PATH as VVORT;
 //!
@@ -155,6 +158,9 @@
 //! # #[cfg(false)]
 //! const SINGER_STYLE_NAME: &str = "ノーマル";
 //! # const SINGER_STYLE_NAME: &str = "style4-1";
+//!
+//! # #[cfg(false)]
+//! tracing_subscriber::fmt().init(); // `voicevox_core`や(VOICEVOX) ONNX Runtimeの情報表示や警告は、`tracing`に出力される。
 //!
 //! let synth = {
 //!     let ort = Onnxruntime::load_once().filename(VVORT).perform()?;
@@ -235,7 +241,7 @@
 //!
 //! ユーザーガイドの[テキスト音声合成の流れ]を参照。
 //!
-//! 以下の`wav1`から`wav4`はすべて同一となる。
+//! 以下の`wav1`から`wav6`はすべて同一となる。
 //!
 //! [テキスト音声合成の流れ]: https://github.com/VOICEVOX/voicevox_core/blob/main/docs/guide/user/tts-process.md
 //!
@@ -255,7 +261,7 @@
 //! #   #[cfg(false)]
 //!     const TEXT: &str = _;
 //! #
-//! #   const STYLE_ID: StyleId = StyleId(0);
+//! #   const STYLE_ID: StyleId = StyleId(302);
 //! #   #[cfg(false)]
 //!     const STYLE_ID: StyleId = _;
 //!
@@ -287,7 +293,21 @@
 //!         synth.synthesis(&query, STYLE_ID).perform()?
 //!     };
 //!
-//!     assert_eq!(1, HashSet::from([wav1, wav2, wav3, wav4, wav5]).len());
+//!     let wav6 = {
+//!         let phrases = synth.text_analyzer().analyze(TEXT)?;
+//!         let phrases = synth.replace_phoneme_length(&phrases, STYLE_ID)?;
+//!         let phrases = synth.replace_mora_pitch(&phrases, STYLE_ID)?;
+//!         let query = AudioQuery::from(phrases);
+//!         let feat = synth.create_audio_feature(&query, STYLE_ID).perform()?;
+//!         let pcm = synth.render(feat.slice(..))?; // `feat`そのままでも可
+//!         voicevox_core::wav_from_s16le(
+//!             &pcm,
+//!             query.output_sampling_rate.get().get(),
+//!             query.output_stereo,
+//!         )
+//!     };
+//!
+//!     assert_eq!(1, HashSet::from([wav1, wav2, wav3, wav4, wav5, wav6]).len());
 //!     Ok(())
 //! }
 //! #
@@ -336,15 +356,20 @@ pub mod __doc {
     ///
     /// | | 理由 |
     /// | :- | :- |
-    /// | `VoicevoxLoadOnnxruntimeOptions` | ビルダースタイルであるため |
+    /// | `VoicevoxAudioQueryFrameLengthOptions` | ビルダースタイルであるため |
+    /// | `VoicevoxLoadOnnxruntimeOptions` | 〃 |
     /// | `VoicevoxInitializeOptions` | 〃 |
     /// | `VoicevoxSynthesisOptions` | 〃 |
     /// | `VoicevoxTtsOptions` | 〃 |
+    /// | `voicevox_make_default_audio_query_frame_length_options` | 〃 |
     /// | `voicevox_make_default_load_onnxruntime_options` | 〃 |
     /// | `voicevox_make_default_initialize_options` | 〃 |
+    /// | `voicevox_make_default_load_voice_model_options` | 〃 |
     /// | `voicevox_make_default_synthesis_options` | 〃 |
     /// | `voicevox_make_default_tts_options` | 〃 |
-    /// | `voicevox_json_free` | [Rustのデストラクタ機構]があるため |
+    /// | `voicevox_string_free` | [Rustのデストラクタ機構]があるため |
+    /// | `voicevox_json_free` | 〃 |
+    /// | `voicevox_bytes_free` | 〃 |
     /// | `voicevox_wav_free` | 〃 |
     /// | `voicevox_open_jtalk_rc_delete` | 〃 |
     /// | `voicevox_synthesizer_delete` | 〃 |
@@ -356,15 +381,19 @@ pub mod __doc {
     /// [C API]: https://voicevox.github.io/voicevox_core/apis/c_api/voicevox__core_8h.html
     /// [Rustのデストラクタ機構]: https://doc.rust-lang.org/reference/destructors.html
     #[doc(alias(
+        "VoicevoxAudioQueryFrameLengthOptions",
         "VoicevoxLoadOnnxruntimeOptions",
         "VoicevoxInitializeOptions",
         "VoicevoxSynthesisOptions",
         "VoicevoxTtsOptions",
+        "voicevox_make_default_audio_query_frame_length_options",
         "voicevox_make_default_load_onnxruntime_options",
         "voicevox_make_default_initialize_options",
         "voicevox_make_default_synthesis_options",
         "voicevox_make_default_tts_options",
+        "voicevox_string_free",
         "voicevox_json_free",
+        "voicevox_bytes_free",
         "voicevox_wav_free",
         "voicevox_open_jtalk_rc_delete",
         "voicevox_synthesizer_delete",
@@ -433,13 +462,16 @@ pub mod __doc {
     pub mod Serde対応 {}
 }
 
+mod assert;
 mod asyncs;
+mod audio_feature;
 mod collections;
 mod convert;
 mod core;
-/// cbindgen:ignore
+mod dim;
 mod engine;
 mod error;
+mod frame;
 mod future;
 mod macros;
 mod numerics;
@@ -465,6 +497,7 @@ mod test_util;
 use rstest_reuse;
 
 pub use self::{
+    audio_feature::{AudioFeature, AudioFeatureSlice},
     core::{
         devices::SupportedDevices,
         metas::{CharacterMeta, CharacterVersion, StyleId, StyleMeta, StyleType, VoiceModelMeta},
@@ -472,27 +505,26 @@ pub use self::{
         voice_model::VoiceModelId,
     },
     engine::{
-        Phoneme, SamplingRate, Sil,
+        Consonant, NonConsonant, Phoneme, SamplingRate, Sil,
         song::{
             queries::{FrameAudioQuery, FramePhoneme, Key, Note, NoteId, OptionalLyric, Score},
             validate::ensure_compatible,
         },
         talk::{
-            AccentPhrase, AudioQuery, Mora,
-            user_dict::{UserDictWord, UserDictWordBuilder, UserDictWordType},
+            AccentPhrase, AudioQuery, AudioQueryFrameLength, Mora,
+            user_dict::{
+                UserDictWord, UserDictWordBuilder, UserDictWordPriority, UserDictWordType,
+            },
         },
+        wav_from_s16le,
     },
     error::{Error, ErrorKind},
+    frame::FRAME_RATE,
     pitch_noise::PitchNoiseOptions,
     result::Result,
     synthesizer::AccelerationMode,
     version::VERSION,
 };
-
-// TODO: 後で復活させる
-// https://github.com/VOICEVOX/voicevox_core/issues/970
-#[doc(hidden)]
-pub use self::engine::wav_from_s16le as __wav_from_s16le;
 
 // `azalea` fork: segmented rendering for streaming synthesis.
 pub use self::synthesizer::split_talk::{

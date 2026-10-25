@@ -41,7 +41,7 @@ pub enum VoicevoxResultCode {
     /// ZIP内のファイルが読めなかった
     VOICEVOX_RESULT_READ_ZIP_ENTRY_ERROR = 17,
     /// モデルの形式が不正
-    VOICEVOX_RESULT_INVALID_MODEL_HEADER_ERROR = 28,
+    VOICEVOX_RESULT_INVALID_MODEL_FORMAT_ERROR = 28,
     /// すでに読み込まれている音声モデルを読み込もうとした
     VOICEVOX_RESULT_MODEL_ALREADY_LOADED_ERROR = 18,
     /// すでに読み込まれているスタイルを読み込もうとした
@@ -72,6 +72,12 @@ pub enum VoicevoxResultCode {
     VOICEVOX_RESULT_INVALID_FRAME_PHONEME_ERROR = 34,
     /// 楽譜とFrameAudioQueryの組み合わせが不正
     VOICEVOX_RESULT_INCOMPATIBLE_QUERIES_ERROR = 35,
+    /// AudioFeatureSliceをスライスするときの始端が大きすぎた
+    VOICEVOX_RESULT_START_OUT_OF_BOUNDS_ERROR = 36,
+    /// AudioFeatureSliceをスライスするときの終端が大きすぎた
+    VOICEVOX_RESULT_END_OUT_OF_BOUNDS_ERROR = 37,
+    /// AudioFeatureSliceをスライスするときに始端が終端を超えていた
+    VOICEVOX_RESULT_START_EXCEEDS_END_ERROR = 38,
 }
 
 pub(crate) const fn error_result_to_message(result_code: VoicevoxResultCode) -> &'static CStr {
@@ -104,7 +110,7 @@ pub(crate) const fn error_result_to_message(result_code: VoicevoxResultCode) -> 
         VOICEVOX_RESULT_INVALID_ACCENT_PHRASE_ERROR => c"無効なaccent_phraseです",
         VOICEVOX_RESULT_OPEN_ZIP_FILE_ERROR => c"ZIPファイルのオープンに失敗しました",
         VOICEVOX_RESULT_READ_ZIP_ENTRY_ERROR => c"ZIP内のファイルを読むことができませんでした",
-        VOICEVOX_RESULT_INVALID_MODEL_HEADER_ERROR => c"モデルの形式が不正です",
+        VOICEVOX_RESULT_INVALID_MODEL_FORMAT_ERROR => c"モデルの形式が不正です",
         VOICEVOX_RESULT_MODEL_ALREADY_LOADED_ERROR => c"同じIDのモデルを読むことはできません",
         VOICEVOX_RESULT_STYLE_ALREADY_LOADED_ERROR => c"同じIDのスタイルを読むことはできません",
         VOICEVOX_RESULT_INVALID_MODEL_DATA_ERROR => c"モデルデータを読むことができませんでした",
@@ -126,5 +132,8 @@ pub(crate) const fn error_result_to_message(result_code: VoicevoxResultCode) -> 
         VOICEVOX_RESULT_INCOMPATIBLE_QUERIES_ERROR => {
             c"不正な楽譜とFrameAudioQueryの組み合わせです。異なる音素ID列です"
         }
+        VOICEVOX_RESULT_START_OUT_OF_BOUNDS_ERROR => c"始端の値が大きすぎます",
+        VOICEVOX_RESULT_END_OUT_OF_BOUNDS_ERROR => c"終端の値が大きすぎます",
+        VOICEVOX_RESULT_START_EXCEEDS_END_ERROR => c"始端が終端を超過しています",
     }
 }

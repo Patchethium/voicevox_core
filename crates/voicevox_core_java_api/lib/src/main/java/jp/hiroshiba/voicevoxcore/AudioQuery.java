@@ -32,7 +32,7 @@ import jp.hiroshiba.voicevoxcore.internal.Dll;
  * <p>Gsonについては将来的には <a href="https://github.com/VOICEVOX/voicevox_core/issues/984"
  * target="_blank">Jacksonに切り替わる予定</a> 。
  */
-public class AudioQuery {
+public final class AudioQuery {
   static {
     Dll.loadLibrary();
   }
@@ -88,6 +88,95 @@ public class AudioQuery {
   }
 
   /**
+   * 音声の総フレーム数を算出する。
+   *
+   * <p>音声の秒数は、フレーム数を{@link Frames#FRAME_RATE FRAME_RATE}で割った値で表せる。
+   *
+   * <p>算出した値は32-bit環境では2<sup>32</sup>-1、64-bit環境では{@link Long#MAX_VALUE}で飽和する。算出方法は以下の通り。
+   *
+   * <ol>
+   *   <li>以下の秒数を32-bit浮動小数点数として解釈して集める。
+   *       <ul>
+   *         <li>{@link #prePhonemeLength}
+   *         <li>{@link #accentPhrases}の要素ごとに
+   *             <ul>
+   *               <li>{@link AccentPhrase#moras}の要素ごとに
+   *                   <ul>
+   *                     <li>{@link Mora#consonantLength}
+   *                     <li>{@link Mora#vowelLength}
+   *                   </ul>
+   *               <li>{@link FrameLengthConfigurator#interrogativeUpspeak(boolean)
+   *                   interrogativeUpspeak}が{@code true}かつ{@link
+   *                   AccentPhrase#isInterrogative}かつ{@link AccentPhrase#moras}の最後の{@link
+   *                   Mora#pitch}が{@code 0.0}以外のとき、{@code 0.15}秒
+   *               <li>{@link AccentPhrase#pauseMora}の{@link Mora#consonantLength}（通常はない）
+   *               <li>{@link AccentPhrase#pauseMora}の{@link Mora#vowelLength}
+   *             </ul>
+   *         <li>{@link #postPhonemeLength}
+   *       </ul>
+   *   <li>それぞれの秒数を{@code secs}として、対応するフレーム長を<code>roundTiesEven(roundTiesEven(secs * {@link
+   *       Frames#FRAME_RATE FRAME_RATE}) / {@link #speedScale})</code>として算出する。ここで{@code
+   *       roundTiesEven}は<a
+   *       href="https://doc.rust-lang.org/stable/std/primitive.f32.html#method.round_ties_even">Rustの{@code
+   *       f32::round_ties_even}</a>であり、{@link Math#rint(double) Math.rint}と同様IEEE 754の{@code
+   *       roundToIntegralTiesToEven}演算を行う。{@link
+   *       #speedScale}も32-bit浮動小数点数として解釈し、乗算と除算も32-bit浮動小数点数上で行う。
+   *   <li>各フレーム長を足し合わせる。
+   * </ol>
+   *
+   * <p>{@code AudioQuery}に対応する音声の長さは将来的に変わる可能性がある。例えば、秒数を64-bit浮動小数点数として解釈しているVOICEVOX
+   * ENGINEと挙動を揃える可能性がある。
+   *
+   * <p>使用例:
+   *
+   * <pre>{@code
+   * AudioQuery query = synth.createAudioQuery("こんにちは、音声合成の世界へようこそ", WHATEVER_STYLE1);
+   * AudioFeature audio = synth.createAudioFeature(query, WHATEVER_STYLE2).perform();
+   *
+   * assert query.frameLength().calculate() == audio.length();
+   * }</pre>
+   *
+   * <pre>{@code
+   * void main() {
+   *   AudioQuery query = AudioQuery.fromAccentPhrases(Arrays.asList());
+   *   query.speedScale = 1.2;
+   *   query.prePhonemeLength = 3.3;
+   *   query.postPhonemeLength = 4.4;
+   *
+   *   assert query.frameLength().calculate()
+   *       // `speed_scale`, `pre_phoneme_length`
+   *       == toFrameLength((float) query.prePhonemeLength, (float) query.speedScale)
+   *           // `speed_scale`, `consonant_length`, `vowel_length`, `is_interrogative`
+   *           + 0
+   *           // `speed_scale`, `post_phoneme_length`
+   *           + toFrameLength((float) query.postPhonemeLength, (float) query.speedScale);
+   * }
+   *
+   * private static long toFrameLength(float secs, float speedScale) {
+   *   final float FRAME_RATE = (float) Frames.FRAME_RATE;
+   *   return (long) roundevenf(roundevenf(secs * FRAME_RATE) / speedScale);
+   * }
+   *
+   * private static float roundevenf(float value) {
+   *   return (float) Math.rint(value);
+   * }
+   * }</pre>
+   *
+   * <pre>{@code
+   * AudioQuery query = AudioQuery.fromAccentPhrases(Arrays.asList());
+   * query.speedScale = Float.MIN_NORMAL;
+   * assert query.frameLength().calculate() == Long.MAX_VALUE; // 64-bit環境の場合
+   * }</pre>
+   *
+   * @return {@link FrameLengthConfigurator}。
+   * @see FrameLengthConfigurator#calculate
+   */
+  @Nonnull
+  public FrameLengthConfigurator frameLength() {
+    return new FrameLengthConfigurator(this);
+  }
+
+  /**
    * このインスタンスが不正であるときエラーを返す。
    *
    * <p>不正であるとは、{@code @throws}で示す条件を満たすことである。
@@ -95,11 +184,6 @@ public class AudioQuery {
    * <p>また次の状態に対してはログで警告を出す。将来的にはエラーになる予定。
    *
    * <ul>
-   *   <li>{@link #accentPhrases}の要素のうちいずれかが警告が出る状態。
-   *   <li>{@link #speedScale}が負。
-   *   <li>{@link #volumeScale}が負。
-   *   <li>{@link #prePhonemeLength}が負。
-   *   <li>{@link #postPhonemeLength}が負。
    *   <li>{@link #outputSamplingRate}が{@code 24000}以外の値（エラーと同様将来的に解消予定）。
    * </ul>
    *
@@ -118,11 +202,18 @@ public class AudioQuery {
    *           href="https://voicevox.github.io/voicevox_core/apis/rust_api/voicevox_core/struct.AudioQuery.html">Rust
    *           APIの{@code AudioQuery}型</a>としてデシリアライズ不可。
    *           <ul>
-   *             <li>{@link #outputSamplingRate}が負であるか、もしくは2<sup>32</sup>-1を超過する。
+   *             <li>{@link #speedScale}が負。
+   *             <li>{@link #volumeScale}が負。
+   *             <li>{@link #prePhonemeLength}が負。
+   *             <li>{@link #postPhonemeLength}が負。
+   *             <li>{@link #outputSamplingRate}が以下の値を取る。
+   *                 <ul>
+   *                   <li>{@code 0}以下の値。
+   *                   <li>{@code 24000}の倍数以外（将来的に解消予定。cf. <a
+   *                       href="https://github.com/VOICEVOX/voicevox_core/issues/762">#762</a>）。
+   *                 </ul>
    *           </ul>
    *       <li>{@link #accentPhrases}の要素のうちいずれかが不正。
-   *       <li>{@link #outputSamplingRate}が{@code 24000}の倍数ではない、もしくは{@code 0} (将来的に解消予定。cf. <a
-   *           href="https://github.com/VOICEVOX/voicevox_core/issues/762">#762</a>)
    *     </ul>
    */
   public void validate() {
@@ -160,5 +251,43 @@ public class AudioQuery {
   @Nonnull
   private static native String rsFromAccentPhrases(String accentPhrases);
 
+  private native long rsFrameLength(boolean enableInterrogativeUpspeak);
+
   private native void rsValidate();
+
+  /** {@link AudioQuery#frameLength} のオプション。 */
+  public final class FrameLengthConfigurator {
+    private AudioQuery audioQuery;
+    private boolean interrogativeUpspeak; // FIXME: デフォルトで`false`になってしまっている！
+
+    private FrameLengthConfigurator(AudioQuery audioQuery) {
+      this.audioQuery = audioQuery;
+      this.interrogativeUpspeak = false;
+    }
+
+    /**
+     * 疑問文の調整を有効にするかどうか。
+     *
+     * @param interrogativeUpspeak 疑問文の調整を有効にするかどうか。
+     * @return {@link FrameLengthConfigurator}。
+     */
+    @Nonnull
+    public FrameLengthConfigurator interrogativeUpspeak(boolean interrogativeUpspeak) {
+      this.interrogativeUpspeak = interrogativeUpspeak;
+      return this;
+    }
+
+    /**
+     * 音声の総フレーム数を算出する。
+     *
+     * @return 総フレーム数
+     * @throws InvalidQueryException {@link AudioQuery}が<a
+     *     href="https://voicevox.github.io/voicevox_core/apis/rust_api/voicevox_core/struct.AudioQuery.html">Rust
+     *     APIの{@code AudioQuery}型</a>としてデシリアライズ不可の場合
+     * @see AudioQuery#frameLength
+     */
+    public long calculate() {
+      return audioQuery.rsFrameLength(interrogativeUpspeak);
+    }
+  }
 }

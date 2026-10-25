@@ -51,7 +51,7 @@ steps. With sigma zero, completion is deterministic regardless of seed.
 
 ## Automatic loading and supported graphs
 
-Every talk and experimental-talk intonation session is transformed during
+Every talk and streaming-talk intonation session is transformed during
 ordinary VVM loading, even when only deterministic APIs are used. A temporary
 CPU session with optimizations disabled exports a self-contained ONNX model.
 Only binary input uses `session.use_vv_bin`. `tempfile` owns the private export
@@ -113,7 +113,7 @@ cargo check -p voicevox_core --all-targets --features load-onnxruntime --locked
 Automated tests use the public sample model, including constructed nested
 selection and sequence-collection variants. They check graph rejection and
 duplicate markers, seeded and concurrent requests, finite-value validation,
-voiced-only placement, API parity, non-pitch preservation, experimental-talk
+voiced-only placement, API parity, non-pitch preservation, streaming-talk
 inference and atomic registration/reload failures. Original and transformed
 sessions use identical Level1 CPU inference settings. Zero-noise comparisons
 allow at most `1e-6` absolute error in log-pitch units for runtime/kernel fusion

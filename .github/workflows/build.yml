@@ -184,6 +184,8 @@ jobs:
   create_draft_release:
     needs: config
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       # `draft-release`がtrueなら、GitHub REST APIの`Release`オブジェクトの一部。falseならnull。
       release: ${{ steps.create-draft-release.outputs.release || 'null' }}
@@ -229,6 +231,8 @@ jobs:
   build:
     needs: [config, create_draft_release]
     environment: ${{ inputs.code_signing && 'code_signing' || '' }} # コード署名用のenvironment
+    permissions:
+      contents: write
     strategy:
       matrix:
         include: ${{ fromJson(needs.config.outputs.includes) }}
@@ -236,7 +240,7 @@ jobs:
     env:
       ASSET_NAME: voicevox_core-${{ matrix.artifact_name }}-${{ needs.config.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # NOTE: PyO3の制約で、RustのターゲットとPythonのビット数を一致させる必要がある。
       # https://github.com/PyO3/pyo3/blob/v0.27.1/pyo3-ffi/build.rs#L138-L143
       - name: Determine Python interpreter architecture
@@ -254,7 +258,7 @@ jobs:
           echo "architecture=$architecture" >> "$GITHUB_OUTPUT"
       - name: Set up Python 3.10
         if: matrix.python_whl
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.10"
           architecture: ${{ steps.python-interpreter-arch.outputs.architecture }}
@@ -273,9 +277,12 @@ jobs:
           echo "$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
           echo "AR_${{ matrix.target }}=llvm-ar" >> "$GITHUB_ENV"
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@cargo-binstall
+        uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-binstall
       - name: Install cargo-edit
-        run: cargo binstall cargo-edit@^0.11 --no-confirm --log-level debug
+        # https://github.com/cargo-bins/cargo-quickinstall/releases/tag/cargo-edit-0.13.13
+        run: cargo binstall cargo-edit@0.13.13 --no-confirm --log-level debug
       - name: set cargo version
         run: |
           version=${{ needs.config.outputs.version }}
@@ -284,7 +291,10 @@ jobs:
             sed -i_ 's/version = "\(0\.0\.0\)"/version = "'$version'"/' ./crates/voicevox_core_python_api/pyproject.toml
           fi
       - name: cache target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: set deployment target
+        if: contains(matrix.target, '-apple-')
+        run: rustc --target=${{ matrix.target }} --print=deployment-target >> "$GITHUB_ENV"
       - name: build voicevox_core_c_api
         shell: bash
         run: |
@@ -307,13 +317,9 @@ jobs:
           (cd crates/voicevox_core_python_api && poetry install --with dev)
           maturin build --manifest-path ./crates/voicevox_core_python_api/Cargo.toml --target ${{ matrix.target }} --release
           echo "whl=$(find ./target/wheels -type f)" >> "$GITHUB_OUTPUT"
-        env:
-          VVCORE_BUILD_DOWNLOAD_AND_COPY_ORT: '0'
       - name: build voicevox_core_java_api
         if: ${{ matrix.java }}
         run: cargo build -p voicevox_core_java_api -vv --target ${{ matrix.target }} --release
-        env:
-          VVCORE_BUILD_DOWNLOAD_AND_COPY_ORT: '0'
       - name: Organize artifact
         run: |
           mkdir -p artifact/${{ env.ASSET_NAME }}/{include,lib}
@@ -345,8 +351,8 @@ jobs:
           APPLE_P12_BASE64: ${{ secrets.APPLE_P12_BASE64 }}
           APPLE_P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
       - name: Upload artifact to build XCFramework
-        if: matrix.c_release_format == 'ios-xcframework'
-        uses: actions/upload-artifact@v4
+        if: matrix.artifact_name == 'osx-arm64' || matrix.artifact_name == 'osx-x64' || matrix.c_release_format == 'ios-xcframework'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: voicevox_core-${{ matrix.target }}
           path: artifact/${{ env.ASSET_NAME }}
@@ -368,7 +374,7 @@ jobs:
           files: ${{ steps.build-voicevox-core-python-api.outputs.whl }}
       - name: Upload voicevox_core_java_api artifact
         if: matrix.java
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: voicevox_core_java_api-${{ matrix.artifact_name }}
           path: java_artifact
@@ -377,32 +383,44 @@ jobs:
     if: ${{ needs.config.outputs.mode == 'draft-release' || needs.config.outputs.mode == 'full-test' }}
     needs: [config, create_draft_release, build]
     runs-on: macos-14
+    permissions:
+      contents: write
     env:
       IOS_X86_64_PATH: artifact/voicevox_core-x86_64-apple-ios
       IOS_AARCH64_SIM_PATH: artifact/voicevox_core-aarch64-apple-ios-sim
       IOS_AARCH64_PATH: artifact/voicevox_core-aarch64-apple-ios
-      ASSET_NAME: voicevox_core-ios-xcframework-cpu-${{ needs.config.outputs.version }}
+      MACOS_ARM64_PATH: artifact/voicevox_core-aarch64-apple-darwin
+      MACOS_X64_PATH: artifact/voicevox_core-x86_64-apple-darwin
+      ASSET_NAME: voicevox_core-xcframework-${{ needs.config.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: voicevox_core-x86_64-apple-ios
           path: ${{ env.IOS_X86_64_PATH }}
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: voicevox_core-aarch64-apple-ios-sim
           path: ${{ env.IOS_AARCH64_SIM_PATH }}
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: voicevox_core-aarch64-apple-ios
           path: ${{ env.IOS_AARCH64_PATH }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: voicevox_core-aarch64-apple-darwin
+          path: ${{ env.MACOS_ARM64_PATH }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: voicevox_core-x86_64-apple-darwin
+          path: ${{ env.MACOS_X64_PATH }}
       - name: Create xcframework
         id: create-xcframework
         run: |
-          build_util/make_ios_xcframework.bash
+          build_util/make_xcframework.bash
           echo "output_asset_path=${OUTPUT_ASSET_PATH}" >> "$GITHUB_OUTPUT"
         env:
-          OUTPUT_ASSET_PATH: artifact/voicevox_core-ios-xcframework-cpu
+          OUTPUT_ASSET_PATH: artifact/voicevox_core-xcframework
       - name: Archive artifact
         run: |
           cd ${{ steps.create-xcframework.outputs.output_asset_path }}
@@ -416,26 +434,30 @@ jobs:
 
   build_java_package:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     if: ${{ needs.config.outputs.mode == 'draft-release' || needs.config.outputs.mode == 'full-test' }}
     needs: [config, create_draft_release, build]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Rust
         uses: ./.github/actions/rust-toolchain-from-file
       - name: Set up Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           java-version: "17"
-          distribution: "adopt"
+          distribution: "temurin"
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@cargo-binstall
+        uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-binstall
       - name: Install cargo-edit
         run: cargo binstall cargo-edit@^0.11 --no-confirm
       - name: set cargo version
         run: cargo set-version ${{ needs.config.outputs.version }} -p voicevox_core_java_api
 
       - name: "Download artifact"
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: voicevox_core_java_api-*
           path: artifacts/
@@ -504,6 +526,8 @@ jobs:
   build_downloader:
     needs: [config, create_draft_release]
     if: needs.config.outputs.mode == 'draft-release'
+    permissions:
+      contents: write
     uses: ./.github/workflows/build-downloader.yml
     with:
       upload_url: ${{ fromJson(needs.create_draft_release.outputs.release).upload_url }}
@@ -515,6 +539,8 @@ jobs:
     needs: [config, create_draft_release, build, build_xcframework, build_java_package, build_downloader]
     if: needs.config.outputs.mode == 'draft-release'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Set the tag name
         run: |

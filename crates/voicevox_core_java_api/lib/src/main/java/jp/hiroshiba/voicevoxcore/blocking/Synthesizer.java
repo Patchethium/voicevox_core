@@ -9,9 +9,11 @@ import java.util.List;
 import java.util.UUID;
 import jp.hiroshiba.voicevoxcore.AccelerationMode;
 import jp.hiroshiba.voicevoxcore.AccentPhrase;
+import jp.hiroshiba.voicevoxcore.AudioFeature;
 import jp.hiroshiba.voicevoxcore.AudioQuery;
 import jp.hiroshiba.voicevoxcore.CharacterMeta;
 import jp.hiroshiba.voicevoxcore.FrameAudioQuery;
+import jp.hiroshiba.voicevoxcore.OnExistingVoiceModelId;
 import jp.hiroshiba.voicevoxcore.Score;
 import jp.hiroshiba.voicevoxcore.StyleType;
 import jp.hiroshiba.voicevoxcore.exceptions.IncompatibleQueriesException;
@@ -27,7 +29,7 @@ import jp.hiroshiba.voicevoxcore.internal.Dll;
  *
  * @see Synthesizer#builder
  */
-public class Synthesizer {
+public final class Synthesizer {
   static {
     Dll.loadLibrary();
   }
@@ -98,10 +100,11 @@ public class Synthesizer {
    * モデルを読み込む。
    *
    * @param voiceModel 読み込むモデル。
-   * @throws InvalidModelDataException 無効なモデルデータの場合。
+   * @return {@link LoadVoiceModelConfigurator}。
    */
-  public void loadVoiceModel(VoiceModelFile voiceModel) throws InvalidModelDataException {
-    rsLoadVoiceModel(voiceModel);
+  @Nonnull
+  public LoadVoiceModelConfigurator loadVoiceModel(VoiceModelFile voiceModel) {
+    return new LoadVoiceModelConfigurator(this, voiceModel);
   }
 
   /**
@@ -291,6 +294,49 @@ public class Synthesizer {
   }
 
   /**
+   * {@link AudioQuery} から音声合成用の中間表現を生成する。
+   *
+   * <p>ストリーミング音声合成にはいくつか注意事項がある。ユーザーガイドの<a
+   * href="https://github.com/VOICEVOX/voicevox_core/blob/main/docs/guide/user/usage.md#%E3%82%B9%E3%83%88%E3%83%AA%E3%83%BC%E3%83%9F%E3%83%B3%E3%82%B0%E9%9F%B3%E5%A3%B0%E5%90%88%E6%88%90">ストリーミング音声合成</a>を参照。
+   *
+   * @param audioQuery {@link AudioQuery}。
+   * @param styleId スタイルID。
+   * @return {@link CreateAudioFeatureConfigurator}。
+   * @see CreateAudioFeatureConfigurator#perform
+   */
+  @Nonnull
+  public CreateAudioFeatureConfigurator createAudioFeature(AudioQuery audioQuery, int styleId) {
+    return new CreateAudioFeatureConfigurator(this, audioQuery, styleId);
+  }
+
+  /**
+   * 音声合成用の中間表現から指定区間の16-bit PCM音声を生成する。
+   *
+   * @param audioFeatureSlice 音声合成用の中間表現。
+   * @return 16-bit PCM音声データ。
+   * @throws RunModelException 推論に失敗した場合。
+   */
+  @Nonnull
+  public byte[] render(AudioFeature.Slice audioFeatureSlice) throws RunModelException {
+    // TODO: jniに頼ってもよいかもしれない？
+    int startInclusive = audioFeatureSlice.getStartOffset();
+    int endExclusive = audioFeatureSlice.getStartOffset() + audioFeatureSlice.length();
+    return rsRender(audioFeatureSlice.getAudioFeature(), startInclusive, endExclusive);
+  }
+
+  /**
+   * 音声合成用の中間表現から指定区間の16-bit PCM音声を生成する。
+   *
+   * @param audioFeature 音声合成用の中間表現。
+   * @return 16-bit PCM音声データ。
+   * @throws RunModelException 推論に失敗した場合。
+   */
+  @Nonnull
+  public byte[] render(AudioFeature audioFeature) throws RunModelException {
+    return rsRender(audioFeature, 0, audioFeature.length());
+  }
+
+  /**
    * AquesTalk風記法をもとに音声合成を実行するためのオブジェクトを生成する。
    *
    * @param kana AquesTalk風記法。
@@ -441,7 +487,8 @@ public class Synthesizer {
   @Nonnull
   private native String rsGetMetasJson();
 
-  private native void rsLoadVoiceModel(VoiceModelFile voiceModel) throws InvalidModelDataException;
+  private native void rsLoadVoiceModel(VoiceModelFile voiceModel, OnExistingVoiceModelId onExisting)
+      throws InvalidModelDataException;
 
   private native void rsUnloadVoiceModel(UUID voiceModelId);
 
@@ -475,6 +522,13 @@ public class Synthesizer {
   @Nonnull
   private native byte[] rsSynthesis(
       String queryJson, int styleId, boolean enableInterrogativeUpspeak) throws RunModelException;
+
+  private native AudioFeature rsCreateAudioFeature(
+      String queryJson, int styleId, boolean enableInterrogativeUpspeak) throws RunModelException;
+
+  @Nonnull
+  private native byte[] rsRender(AudioFeature audioFeature, int startInclusive, int endExclusive)
+      throws RunModelException;
 
   @Nonnull
   private native byte[] rsTtsFromKana(String kana, int styleId, boolean enableInterrogativeUpspeak)
@@ -511,7 +565,7 @@ public class Synthesizer {
    *
    * @see Synthesizer#builder
    */
-  public static class Builder {
+  public static final class Builder {
     private Onnxruntime onnxruntime;
     private OpenJtalk openJtalk;
 
@@ -544,7 +598,7 @@ public class Synthesizer {
      * @return ビルダー。
      */
     public Builder cpuNumThreads(int cpuNumThreads) {
-      if (Utils.isU16(cpuNumThreads)) {
+      if (!Utils.isU16(cpuNumThreads)) {
         throw new IllegalArgumentException("cpuNumThreads");
       }
       this.cpuNumThreads = cpuNumThreads;
@@ -562,12 +616,46 @@ public class Synthesizer {
     }
   }
 
+  /** {@link Synthesizer#loadVoiceModel} のオプション。 */
+  public final class LoadVoiceModelConfigurator {
+    private Synthesizer synthesizer;
+    private VoiceModelFile voiceModel;
+
+    private OnExistingVoiceModelId onExisting;
+
+    private LoadVoiceModelConfigurator(Synthesizer synthesizer, VoiceModelFile voiceModel) {
+      this.synthesizer = synthesizer;
+      this.voiceModel = voiceModel;
+    }
+
+    /**
+     * 同じIDの{@link VoiceModelFile}が既に読み込まれていたときのふるまい。
+     *
+     * @param onExisting ふるまいの指定。
+     * @return {@link LoadVoiceModelConfigurator}。
+     */
+    @Nonnull
+    public LoadVoiceModelConfigurator onExisting(OnExistingVoiceModelId onExisting) {
+      this.onExisting = onExisting;
+      return this;
+    }
+
+    /**
+     * 実行する。
+     *
+     * @throws InvalidModelDataException 無効なモデルデータの場合。
+     */
+    public void perform() throws InvalidModelDataException {
+      synthesizer.rsLoadVoiceModel(voiceModel, onExisting);
+    }
+  }
+
   /** {@link Synthesizer#synthesis} のオプション。 */
-  public class SynthesisConfigurator {
+  public final class SynthesisConfigurator {
     private Synthesizer synthesizer;
     private AudioQuery audioQuery;
     private int styleId;
-    private boolean interrogativeUpspeak;
+    private boolean interrogativeUpspeak; // FIXME: デフォルトで`false`になってしまっている！
 
     private SynthesisConfigurator(Synthesizer synthesizer, AudioQuery audioQuery, int styleId) {
       if (!Utils.isU32(styleId)) {
@@ -607,12 +695,54 @@ public class Synthesizer {
     }
   }
 
+  /** {@link Synthesizer#createAudioFeature} のオプション。 */
+  public final class CreateAudioFeatureConfigurator {
+    private Synthesizer synthesizer;
+    private AudioQuery audioQuery;
+    private int styleId;
+    private boolean interrogativeUpspeak; // FIXME: デフォルトで`false`になってしまっている！
+
+    private CreateAudioFeatureConfigurator(
+        Synthesizer synthesizer, AudioQuery audioQuery, int styleId) {
+      if (!Utils.isU32(styleId)) {
+        throw new IllegalArgumentException("styleId");
+      }
+      this.synthesizer = synthesizer;
+      this.audioQuery = audioQuery;
+      this.styleId = styleId;
+    }
+
+    /**
+     * 疑問文の調整を有効にするかどうか。
+     *
+     * @param interrogativeUpspeak 疑問文の調整を有効にするかどうか。
+     * @return {@link CreateAudioFeatureConfigurator}。
+     */
+    @Nonnull
+    public CreateAudioFeatureConfigurator interrogativeUpspeak(boolean interrogativeUpspeak) {
+      this.interrogativeUpspeak = interrogativeUpspeak;
+      return this;
+    }
+
+    /**
+     * 音声合成用の中間表現を生成する。
+     *
+     * @return 音声合成用の中間表現。
+     * @throws RunModelException 推論に失敗した場合。
+     */
+    @Nonnull
+    public AudioFeature perform() throws RunModelException {
+      String queryJson = Convert.jsonFromQueryLike(this.audioQuery, "不正なAudioQueryです");
+      return synthesizer.rsCreateAudioFeature(queryJson, this.styleId, this.interrogativeUpspeak);
+    }
+  }
+
   /** {@link Synthesizer#ttsFromKana} のオプション。 */
-  public class TtsFromKanaConfigurator {
+  public final class TtsFromKanaConfigurator {
     private Synthesizer synthesizer;
     private String kana;
     private int styleId;
-    private boolean interrogativeUpspeak;
+    private boolean interrogativeUpspeak; // FIXME: デフォルトで`false`になってしまっている！
 
     private TtsFromKanaConfigurator(Synthesizer synthesizer, String kana, int styleId) {
       if (!Utils.isU32(styleId)) {
@@ -651,11 +781,11 @@ public class Synthesizer {
   }
 
   /** {@link Synthesizer#tts} のオプション。 */
-  public class TtsConfigurator {
+  public final class TtsConfigurator {
     private Synthesizer synthesizer;
     private String text;
     private int styleId;
-    private boolean interrogativeUpspeak;
+    private boolean interrogativeUpspeak; // FIXME: デフォルトで`false`になってしまっている！
 
     private TtsConfigurator(Synthesizer synthesizer, String text, int styleId) {
       if (!Utils.isU32(styleId)) {

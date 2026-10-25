@@ -196,8 +196,11 @@ pub enum Phoneme {
     ConsonantZ,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, derive_more::Display)]
-pub(crate) enum Consonant {
+/// 子音。
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, derive_more::Display, SerializeDisplay,
+)]
+pub enum Consonant {
     /// `b`。
     #[display("b")]
     B,
@@ -327,8 +330,11 @@ pub(crate) enum Consonant {
     Z,
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, derive_more::Display)]
-pub(crate) enum NonConsonant {
+/// 子音ではない音素。
+#[derive(
+    Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, derive_more::Display, SerializeDisplay,
+)]
+pub enum NonConsonant {
     /// `pau`。
     #[display("pau")]
     MorablePau,
@@ -547,7 +553,7 @@ pub(crate) enum MoraTail {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, NoUninit, EnumCount)]
 #[cfg_attr(test, derive(strum::EnumIter))]
 #[repr(i64)]
-pub(crate) enum NonPauBaseVowel {
+pub(super) enum NonPauBaseVowel {
     //None = -1,
     //MorablePau = 0,
     //UnvoicedVowelA = 1,

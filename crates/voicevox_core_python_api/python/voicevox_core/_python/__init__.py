@@ -18,6 +18,7 @@ from .._rust import (
     _validate_note,
     _validate_score,
     _validate_user_dict_word,
+    audio_query_frame_length,
 )
 from ._please_do_not_use import _Reserved
 
@@ -70,7 +71,8 @@ x : UUID
 """
 
 StyleType: TypeAlias = (
-    Literal["talk", "singing_teacher", "frame_decode", "sing"] | _Reserved
+    Literal["talk", "singing_teacher", "frame_decode", "sing", "streaming_talk"]
+    | _Reserved
 )
 """
 
@@ -85,6 +87,8 @@ StyleType: TypeAlias = (
 ``"singing_teacher"`` 歌唱音声合成用のクエリの作成が可能。
 ``"frame_decode"``    歌唱音声合成が可能。
 ``"sing"``            歌唱音声合成用のクエリの作成と歌唱音声合成が可能。
+``"streaming_talk"``  音声合成クエリの作成と通常ないしストリーミングでの音声合成が可能。
+                      ``"talk"`` スタイルの機能を包含する。
 ``_Reserved``         将来のために予約されている値。この値が存在することは決してない。
                       ``str`` のサブタイプであるため、 ``StyleType`` を ``str`` として
                       扱うことは可能。
@@ -104,6 +108,8 @@ StyleType: TypeAlias = (
                 return 2
             case "sing":
                 return 3
+            case "streaming_talk":
+                return 4
 
 .. code-block:: text
 
@@ -258,6 +264,27 @@ def _(mode: AccelerationMode):
     _: str = mode
 
 
+OnExistingVoiceModelId: TypeAlias = Literal["ERROR", "RELOAD", "SKIP"] | _Reserved
+"""
+``Synthesizer::load_voice_model`` の実行時に、同じ ``id`` の ``VoiceModelFile`` が既に読み込まれていたときのふるまい。
+
+============= =============================================
+値            説明
+``"ERROR"``   エラー。デフォルトのふるまい。
+``"RELOAD"``  再読み込みする。VOICEVOX
+              COREでは、長文のテキストを一度に音声合成するとCPU/GPUメモリが大量に占有されたままになる。再読み込みを行うとメモリの使用量が元に戻る。
+``"SKIP"``    スキップする。
+``_Reserved`` 将来のために予約されている値。この値が存在することは決してない。
+              ``str`` のサブタイプであるため、 ``OnExistingVoiceModelId`` を ``str`` として
+              扱うことは可能。
+============= =============================================
+"""
+
+
+def _(on_existing: OnExistingVoiceModelId):
+    _: str = on_existing
+
+
 @dataclasses.dataclass
 class Mora:
     """
@@ -297,23 +324,20 @@ class Mora:
 
         不正であるとは、以下のいずれかの条件を満たすことである。
 
+        - |mora-rust-ty|_ としてデシリアライズ不可。
+            - :attr:`consonant` が子音以外の音素であるか、もしくは音素として不正。
+            - :attr:`consonant_length` がNaN、infinity、もしくは負。
+            - :attr:`vowel` が子音であるか、もしくは音素として不正。
+            - :attr:`vowel_length` がNaN、infinity、もしくは負。
+            - :attr:`pitch` がNaNもしくは±infinity。
         - :attr:`consonant` と :attr:`consonant_length` の有無が不一致。
-        - :attr:`consonant` が子音以外の音素であるか、もしくは音素として不正。
-        - :attr:`vowel` が子音であるか、もしくは音素として不正。
 
         送出するエラーは |mora-validate-invalid-query-error|_  。
 
-        また次の状態に対しては |mora-validate-logging-warning|_
-        レベルのログを出す。将来的にはエラーになる予定。
-
-        - :attr:`consonant_length` がNaN、infinity、もしくは負。
-        - :attr:`vowel_length` がNaN、infinity、もしくは負。
-        - :attr:`pitch` がNaNもしくは±infinity。
-
+        .. |mora-rust-ty| replace:: Rust APIの ``Mora`` 型
+        .. _mora-rust-ty: ../../../rust_api/voicevox_core/struct.Mora.html
         .. |mora-validate-invalid-query-error| replace:: ``InvalidQueryError``
         .. _mora-validate-invalid-query-error: #voicevox_core.InvalidQueryError
-        .. |mora-validate-logging-warning| replace:: ``WARNING``
-        .. _mora-validate-logging-warning: https://docs.python.org/3/library/logging.html#logging.WARNING
         """
         _validate_mora(self)
 
@@ -352,17 +376,11 @@ class AccentPhrase:
         不正であるとは、以下のいずれかの条件を満たすことである。
 
         - |accent-phrase-rust-ty|_ としてデシリアライズ不可。
-            - :attr:`accent` が負であるか、もしくは :math:`2^{64}-1` (32ビットプラットフォームの場合 :math:`2^{32}-1`)を超過する。
+            - :attr:`accent` が ``0`` 以下であるか、もしくは :math:`2^{64}-1` (32ビットプラットフォームの場合 :math:`2^{32}-1`)を超過する。
         - :attr:`moras` もしくは :attr:`pause_mora` の要素のうちいずれかが |accent-phrase-validate-mora-validate|_ 。
-        - :attr:`accent` が ``0`` 。
+        - :attr:`accent` が :attr:`moras` の数を超過している。
 
         送出するエラーは |accent-phrase-validate-invalid-query-error|_ 。
-
-        また次の状態に対しては |accent-phrase-validate-logging-warning|_
-        レベルのログを出す。将来的にはエラーになる予定。
-
-        - :attr:`moras` もしくは :attr:`pause_mora` の要素のうちいずれかが、警告が出る状態。
-        - :attr:`accent` が :attr:`moras` の数を超過している。
 
         .. |accent-phrase-validate-invalid-query-error| replace:: ``InvalidQueryError``
         .. _accent-phrase-validate-invalid-query-error: #voicevox_core.InvalidQueryError
@@ -370,8 +388,6 @@ class AccentPhrase:
         .. _accent-phrase-rust-ty: ../../../rust_api/voicevox_core/struct.AccentPhrase.html
         .. |accent-phrase-validate-mora-validate| replace:: 不正
         .. _accent-phrase-validate-mora-validate: #voicevox_core.Mora.validate
-        .. |accent-phrase-validate-logging-warning| replace:: ``WARNING``
-        .. _accent-phrase-validate-logging-warning: https://docs.python.org/3/library/logging.html#logging.WARNING
         """
         _validate_accent_phrase(self)
 
@@ -442,22 +458,23 @@ class AudioQuery:
         不正であるとは、以下のいずれかの条件を満たすことである。
 
         - |audio-query-rust-ty|_ としてデシリアライズ不可。
-            - :attr:`output_sampling_rate` が負であるか、もしくは :math:`2^{32}-1` を超過する。
+            - :attr:`speed_scale` がNaN、infinity、もしくは負。
+            - :attr:`pitch_scale` がNaNもしくは±infinity。
+            - :attr:`intonation_scale` がNaNもしくは±infinity。
+            - :attr:`volume_scale` がNaN、infinity、もしくは負。
+            - :attr:`pre_phoneme_length` がNaN、infinity、もしくは負。
+            - :attr:`post_phoneme_length` がNaN、infinity、もしくは負。
+            - :attr:`output_sampling_rate` が以下の値をとる。
+                - ``0`` 以下の値。
+                - :math:`2^{32}-1` を超過する値。
+                - ``24000`` の倍数以外 (将来的に解消予定。cf. |audio-query-validate-issue762|_)。
         - :attr:`accent_phrases` の要素のうちいずれかが |audio-query-validate-accent-phrase-validate|_ 。
-        - :attr:`output_sampling_rate` が ``24000`` の倍数ではない、もしくは ``0`` (将来的に解消予定。cf. |audio-query-validate-issue762|_)。
 
         送出するエラーは |audio-query-validate-invalid-query-error|_ 。
 
         また次の状態に対しては |audio-query-validate-logging-warning|_
         レベルのログを出す。将来的にはエラーになる予定。
 
-        - :attr:`accent_phrases` の要素のうちいずれかが警告が出る状態。
-        - :attr:`speed_scale` がNaN、infinity、もしくは負。
-        - :attr:`pitch_scale` がNaNもしくは±infinity。
-        - :attr:`intonation_scale` がNaNもしくは±infinity。
-        - :attr:`volume_scale` がNaN、infinity、もしくは負。
-        - :attr:`pre_phoneme_length` がNaN、infinity、もしくは負。
-        - :attr:`post_phoneme_length` がNaN、infinity、もしくは負。
         - :attr:`output_sampling_rate` が ``24000`` 以外の値（エラーと同様将来的に解消予定）。
 
         .. |audio-query-validate-invalid-query-error| replace:: ``InvalidQueryError``
@@ -472,6 +489,97 @@ class AudioQuery:
         .. _audio-query-validate-logging-warning: https://docs.python.org/3/library/logging.html#logging.WARNING
         """
         _validate_audio_query(self)
+
+    def frame_length(self, *, enable_interrogative_upspeak: bool = True) -> int:
+        """
+        音声の総フレーム数を算出する。
+
+        音声の秒数は、フレーム数を :attr:`FRAME_RATE` で割った値で表せる。
+
+        返す値は ``size_t`` の最大値で飽和する。算出方法は以下の通り。
+
+        1. 以下の秒数を32-bit浮動小数点数として解釈して集める。
+
+           - :attr:`pre_phoneme_length`
+           - :attr:`accent_phrases` の要素ごとに
+
+             - :attr:`AccentPhrase.moras` の要素ごとに
+
+               - :attr:`Mora.consonant_length`
+               - :attr:`Mora.vowel_length`
+
+             - ``enable_interrogative_upspeak`` かつ
+               :attr:`AccentPhrase.is_interrogative` かつ :attr:`AccentPhrase.moras`
+               の最後の :attr:`Mora.pitch` が ``0.0`` 以外のとき、``0.15`` 秒
+             - :attr:`AccentPhrase.pause_mora` の
+               :attr:`Mora.consonant_length` （通常はない）
+             - :attr:`AccentPhrase.pause_mora` の :attr:`Mora.vowel_length`
+
+           - :attr:`post_phoneme_length`
+
+        2. それぞれの秒数を ``secs`` として、対応するフレーム長を
+           ``round_ties_even(round_ties_even(secs * FRAME_RATE) / speed_scale)``
+           として算出する。ここで ``round_ties_even`` は
+           |audio-query-frame-length-round-ties-even|_ であり、
+           |audio-query-frame-length-round|_ や |audio-query-frame-length-numpy-round|_
+           と同様IEEE 754の ``roundToIntegralTiesToEven``
+           演算を行う。 :attr:`speed_scale`
+           も32-bit浮動小数点数として解釈し、乗算と除算も32-bit浮動小数点数上で行う。
+        3. 各フレーム長を足し合わせる。
+
+        .. |audio-query-frame-length-round-ties-even| replace:: Rustの ``f32::round_ties_even``
+        .. _audio-query-frame-length-round-ties-even: https://doc.rust-lang.org/std/primitive.f32.html#method.round_ties_even
+        .. |audio-query-frame-length-round| replace:: ``builtins.round``
+        .. _audio-query-frame-length-round: https://docs.python.org/3/library/functions.html#round
+        .. |audio-query-frame-length-numpy-round| replace:: ``np.round``
+        .. _audio-query-frame-length-numpy-round: https://numpy.org/doc/stable/reference/generated/numpy.round.html
+
+        Notes
+        -----
+        ``AudioQuery``
+        に対応する音声の長さは将来的に変わる可能性がある。例えば、秒数を64-bit浮動小数点数として解釈しているVOICEVOX
+        ENGINEと挙動を揃える可能性がある。
+
+        Examples
+        --------
+
+        >>> query = synth.create_audio_query(
+        ...     "こんにちは、音声合成の世界へようこそ？", WHATEVER_STYLE1
+        ... )
+        >>> feat = synth.create_audio_feature(query, WHATEVER_STYLE2)
+        >>>
+        >>> assert query.frame_length() == len(feat)
+
+        >>> import numpy as np
+        >>> from numpy.lib import NumpyVersion
+        >>> from voicevox_core import FRAME_RATE
+        >>>
+        >>> # `np.float32`と`builtins.float`の乗算がデフォルトで`np.float32`に
+        >>> # なるのはNumPy 2から（cf. NEP 50）
+        >>> assert NumpyVersion(np.__version__).major == 2
+        >>>
+        >>> def to_frame_length(secs: np.float32, speed_scale: np.float32) -> int:
+        ...     return int(((secs * FRAME_RATE).round() / speed_scale).round())
+        >>>
+        >>> query = AudioQuery.from_accent_phrases([])
+        >>> query.speed_scale = 1.2
+        >>> query.pre_phoneme_length = 3.3
+        >>> query.post_phoneme_length = 4.4
+        >>>
+        >>> assert query.frame_length() == (
+        ...     # speed_scale, pre_phoneme_length
+        ...     to_frame_length(np.float32(3.3), np.float32(1.2))
+        ...     # speed_scale, consonant_length, vowel_length, is_interrogative
+        ...     + 0
+        ...     # speed_scale, post_phoneme_length
+        ...     + to_frame_length(np.float32(4.4), np.float32(1.2))
+        ... )
+
+        >>> query = AudioQuery.from_accent_phrases([])
+        >>> query.speed_scale = 1e-20
+        >>> assert query.frame_length() == 0xffffffffffffffff  # 64-bit環境の場合
+        """
+        return audio_query_frame_length(self, enable_interrogative_upspeak)
 
     # テストに使用する目的でのみ存在
 
@@ -620,7 +728,8 @@ class Note:
     """
     音符のフレーム長。
 
-    秒数に93.75をかけ、端数を調整して整数にしたもの。例として125BPM (Beats Per
+    秒数に :attr:`FRAME_RATE` =
+    93.75をかけ、端数を調整して整数にしたもの。例として125BPM (Beats Per
     Minute)における一拍は:
 
     93.75[フレーム/秒] / (125[拍/分] / 60[秒/分]) = 45[フレーム/拍]

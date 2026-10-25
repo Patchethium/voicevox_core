@@ -81,7 +81,7 @@ impl assert_cdylib::TestCase for TestCase {
             )?;
 
             // SAFETY: `supported_devices` is valid and is no longer used.
-            unsafe { lib.voicevox_json_free(supported_devices) };
+            unsafe { lib.voicevox_string_free(supported_devices) };
         }
 
         for result_code in [
@@ -127,7 +127,7 @@ impl assert_cdylib::TestCase for TestCase {
     fn assert_output(&self, output: Utf8Output) -> AssertResult {
         output
             .mask_timestamps()
-            .mask_onnxruntime_filename()
+            .mask_unix_onnxruntime_filename()
             .mask_windows_video_cards()
             .assert()
             .try_success()?

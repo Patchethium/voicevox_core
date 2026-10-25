@@ -47,10 +47,10 @@ int main(int argc, char* argv[]) {
   VoicevoxLoadOnnxruntimeOptions load_onnxruntime_options =
       voicevox_make_default_load_onnxruntime_options();
   char libonnxruntime_filename[128];
-  assert(strlen(voicevox_get_onnxruntime_lib_versioned_filename()) <
+  assert(strlen(voicevox_get_onnxruntime_lib_recommended_versioned_filename()) <
          128 - strlen("./voicevox_core/onnxruntime/lib/"));
   snprintf(libonnxruntime_filename, 128, "./voicevox_core/onnxruntime/lib/%s",
-           voicevox_get_onnxruntime_lib_versioned_filename());
+           voicevox_get_onnxruntime_lib_recommended_versioned_filename());
   load_onnxruntime_options.filename = libonnxruntime_filename;
 
   VoicevoxInitializeOptions initialize_options =
@@ -85,7 +85,8 @@ int main(int argc, char* argv[]) {
 
   TRY(voicevox_voice_model_file_open(kVvm, &model));
 
-  TRY(voicevox_synthesizer_load_voice_model(synthesizer, model));
+  TRY(voicevox_synthesizer_load_voice_model(
+      synthesizer, model, voicevox_make_default_load_voice_model_options()));
 
   TRY(voicevox_synthesizer_create_sing_frame_audio_query(
       synthesizer, kScore, kSingingTeacher, &frame_audio_query));
@@ -99,8 +100,8 @@ int main(int argc, char* argv[]) {
   stdio_result = write_file(wav, wav_length);
 
 cleanup:
-  voicevox_wav_free(wav);
-  voicevox_json_free(frame_audio_query);
+  voicevox_bytes_free(wav);
+  voicevox_string_free(frame_audio_query);
   voicevox_voice_model_file_delete(model);
   voicevox_synthesizer_delete(synthesizer);
   voicevox_open_jtalk_rc_delete(openjtalk);

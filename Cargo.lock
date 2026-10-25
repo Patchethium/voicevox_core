@@ -260,6 +260,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "audio-codec-algorithms"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1254ebf6529f3763c491acfb5ab6e960809e3c75a38584cc664f8c5667fb7107"
+
+[[package]]
+name = "audioadapter"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1292ef9edf681b7426ed089004b021a42896492f58bd0c909ad44e5faec9ac4"
+
+[[package]]
+name = "audioadapter-buffers"
+version = "5.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46289a81a3bfa26d0f8b2415f8ca9decde9a66308a150568af5c102381b3c8ce"
+dependencies = [
+ "audioadapter",
+ "audioadapter-sample",
+ "num-traits",
+]
+
+[[package]]
+name = "audioadapter-sample"
+version = "5.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5258faecf4edbe35ec483bda9b1f7438e6b391891819269c6b5461aeaa0e8d7d"
+dependencies = [
+ "audio-codec-algorithms",
+ "num-traits",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -267,9 +300,9 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.15.2"
+version = "1.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a88aab2464f1f25453baa7a07c84c5b7684e274054ba06817f382357f77a288"
+checksum = "0ec6fb3fe69024a75fa7e1bfb48aa6cf59706a101658ea01bfd33b2b248a038f"
 dependencies = [
  "aws-lc-sys",
  "zeroize",
@@ -277,9 +310,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.35.0"
+version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b45afffdee1e7c9126814751f88dddc747f41d91da16c9551a0f1e8a11e788a1"
+checksum = "f50037ee5e1e41e7b8f9d161680a725bd1626cb6f8c7e901f91f942850852fe7"
 dependencies = [
  "cc",
  "cmake",
@@ -352,17 +385,6 @@ dependencies = [
  "rustc-hash 2.1.1",
  "shlex",
  "syn 2.0.87",
-]
-
-[[package]]
-name = "binstall-tar"
-version = "0.4.42"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3620d72763b5d8df3384f3b2ec47dc5885441c2abbd94dd32197167d08b014a"
-dependencies = [
- "filetime",
- "libc",
- "xattr",
 ]
 
 [[package]]
@@ -489,6 +511,32 @@ name = "camino"
 version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b96ec4966b5813e2c0507c1f86115c8c5abaadc3980879c3424042a02fd1ad3"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "cargo-platform"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e35af189006b9c0f00a064685c727031e3ed2d8020f7ba284d78cc2671bd36ea"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "cargo_metadata"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d886547e41f740c616ae73108f6eb70afe6d940c7bc697cb30f13daec073037"
+dependencies = [
+ "camino",
+ "cargo-platform",
+ "semver",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.64",
+]
 
 [[package]]
 name = "caseless"
@@ -1262,12 +1310,12 @@ name = "downloader"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "binstall-tar",
  "bytes",
  "clap",
  "color-print",
  "comrak",
  "easy-ext",
+ "either",
  "flate2",
  "fs-err",
  "futures-core",
@@ -1287,6 +1335,7 @@ dependencies = [
  "scraper",
  "semver",
  "strum",
+ "tar",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2164,9 +2213,12 @@ dependencies = [
 
 [[package]]
 name = "indoc"
-version = "2.0.5"
+version = "2.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b248f5224d1d606005e02c97f5aa4e88eeb230488bcc03bc9ca4d7991399f2b5"
+checksum = "79cf5c93f93228cf8efb3ba362535fb11199ac548a09ce117c9b1adc3030d706"
+dependencies = [
+ "rustversion",
+]
 
 [[package]]
 name = "inventory"
@@ -2616,9 +2668,9 @@ dependencies = [
 
 [[package]]
 name = "num-bigint"
-version = "0.4.3"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f93ab6289c7b344a8a9f60f88d80aa20032336fe78da341afc91c8a2341fc75f"
+checksum = "608e7659b5c3d7cba262d894801b9ec9d00de989e8a82bd4bef91d08da45cdc0"
 dependencies = [
  "autocfg",
  "num-integer",
@@ -2652,9 +2704,9 @@ dependencies = [
 
 [[package]]
 name = "num-traits"
-version = "0.2.15"
+version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "578ede34cf02f8924ab9447f50c28075b4d3e5b269972345e7e0372b38c6cdcd"
+checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
  "libm",
@@ -3219,6 +3271,8 @@ dependencies = [
  "indoc",
  "libc",
  "memoffset 0.9.0",
+ "num-bigint",
+ "num-traits",
  "once_cell",
  "portable-atomic",
  "pyo3-build-config",
@@ -3755,9 +3809,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.8"
+version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ffdfa2f5286e2247234e03f680868ac2815974dc39e00ea15adc445d0aafe52"
+checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -3878,6 +3932,9 @@ name = "semver"
 version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e25dfac463d778e353db5be2449d1cce89bd6fd23c9f1ea21310ce6e5a1b29c4"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "serde"
@@ -4385,9 +4442,9 @@ dependencies = [
 
 [[package]]
 name = "tar"
-version = "0.4.42"
+version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ff6c40d3aedb5e06b57c6f669ad17ab063dd1e63d977c6a88e7f4dfa4f04020"
+checksum = "22692a6476a21fa75fdfc11d452fda482af402c008cdbaf3476414e122040973"
 dependencies = [
  "filetime",
  "libc",
@@ -4465,6 +4522,7 @@ dependencies = [
  "serde_json",
  "tar",
  "tokio",
+ "voicevox_core_build_features",
  "zip",
 ]
 
@@ -5068,6 +5126,7 @@ dependencies = [
  "blocking",
  "bytemuck",
  "camino",
+ "clap",
  "codspeed-divan-compat",
  "const_format",
  "derive-getters",
@@ -5078,6 +5137,7 @@ dependencies = [
  "educe",
  "enum-map",
  "fs-err",
+ "futures-core",
  "futures-io",
  "futures-lite",
  "futures-util",
@@ -5087,6 +5147,7 @@ dependencies = [
  "jlabel",
  "libloading 0.7.3",
  "ndarray",
+ "num-bigint",
  "num-traits",
  "once_cell",
  "onnx-protobuf",
@@ -5106,6 +5167,7 @@ dependencies = [
  "regex",
  "rstest",
  "rstest_reuse",
+ "rustversion",
  "serde",
  "serde_json",
  "serde_with",
@@ -5114,17 +5176,19 @@ dependencies = [
  "specta",
  "specta-typescript",
  "strum",
+ "sync_wrapper",
  "tempfile",
  "test_util",
  "thiserror 1.0.64",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "typed_floats",
  "typeshare",
  "uuid",
- "voicevox_core",
  "voicevox_core_build_features",
  "voicevox_core_macros",
+ "waveadapter",
  "windows",
  "zip",
 ]
@@ -5134,7 +5198,6 @@ name = "voicevox_core_build_features"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "binstall-tar",
  "camino",
  "flate2",
  "fs-err",
@@ -5147,6 +5210,7 @@ dependencies = [
  "serde",
  "serde_with",
  "sha2",
+ "tar",
  "toml 0.9.11+spec-1.1.0",
 ]
 
@@ -5160,6 +5224,7 @@ dependencies = [
  "assert_cmd",
  "boxcar",
  "camino",
+ "cargo_metadata",
  "chrono",
  "clap",
  "colorchoice",
@@ -5170,6 +5235,7 @@ dependencies = [
  "educe",
  "either",
  "indexmap 2.13.0",
+ "indoc",
  "inventory",
  "itertools 0.10.5",
  "libc",
@@ -5195,6 +5261,7 @@ dependencies = [
  "typetag",
  "uuid",
  "voicevox_core",
+ "waveadapter",
 ]
 
 [[package]]
@@ -5243,6 +5310,8 @@ dependencies = [
  "futures-lite",
  "heck 0.5.0",
  "log",
+ "num-bigint",
+ "ouroboros",
  "pyo3",
  "pyo3-log",
  "ref-cast",
@@ -5368,6 +5437,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f143854a3b13752c6950862c906306adb27c7e839f7414cec8fea35beab624c1"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "waveadapter"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ea698b1ff94f5856d65d89926585abd62bf1e50271f9363e81ad92d0d34bd0d"
+dependencies = [
+ "audioadapter",
+ "audioadapter-buffers",
+ "audioadapter-sample",
+ "num-traits",
 ]
 
 [[package]]
@@ -5903,7 +5984,6 @@ dependencies = [
  "clap",
  "color-eyre",
  "eyre",
- "fs-err",
 ]
 
 [[package]]

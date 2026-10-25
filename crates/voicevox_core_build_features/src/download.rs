@@ -13,13 +13,13 @@ use serde::Deserialize;
 use serde_with::{hex::Hex, serde_as};
 use sha2::{Digest as _, Sha256};
 
-const VERSION: &str = include_str!("../onnxruntime-version.txt");
+const VERSION: &str = include_str!("../onnxruntime-version-for-test.txt");
 
 static TARGET: LazyLock<String> = LazyLock::new(|| env::var("TARGET").unwrap());
 static OUT_DIR: LazyLock<Utf8PathBuf> =
     LazyLock::new(|| env::var("OUT_DIR").expect("`$OUT_DIR` is not UTF-8").into());
 
-pub fn download(add_link_search: bool) -> anyhow::Result<()> {
+pub fn download(add_link_search: bool) -> anyhow::Result<Utf8PathBuf> {
     let up_to_date = {
         let current_exe_mtime =
             fs_err::metadata(process_path::get_executable_path().unwrap())?.modified()?;
@@ -63,7 +63,7 @@ pub fn download(add_link_search: bool) -> anyhow::Result<()> {
         .with_context(|| format!("`{}` not found in onnxruntime-libs.toml", *TARGET))?;
 
     let lib_versioned_file_name = &lib_versioned_file_name(VERSION)?;
-    let lib_path = &lib_dir.join(lib_versioned_file_name);
+    let lib_path = lib_dir.join(lib_versioned_file_name);
 
     let importlib_path = &importlib_file_name().map(|s| lib_dir.join(s));
 
@@ -71,7 +71,7 @@ pub fn download(add_link_search: bool) -> anyhow::Result<()> {
         Some(lib_unversioned_file_name()?).filter(|s| s != lib_versioned_file_name);
 
     // TODO: MSRVを1.91にしたら`std::iter::chain`にする
-    if !itertools::chain([lib_path], importlib_path)
+    if !itertools::chain([&lib_path], importlib_path)
         .map(|p| up_to_date(p.as_ref()))
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
@@ -88,7 +88,7 @@ pub fn download(add_link_search: bool) -> anyhow::Result<()> {
 
         let lib_content = &extract_lib(tgz, lib_versioned_file_name)?;
         verify(lib_content, lib_sha256)?;
-        fs_err::write(lib_path, lib_content)?;
+        fs_err::write(&lib_path, lib_content)?;
 
         if let Some(importlib_path) = importlib_path {
             let importlib_sha256 =
@@ -109,7 +109,7 @@ pub fn download(add_link_search: bool) -> anyhow::Result<()> {
         if dst.is_symlink() {
             fs_err::remove_file(dst)?;
         }
-        symlink_or_copy(lib_path, dst)?;
+        symlink_or_copy(&lib_path, dst)?;
         println!("cargo::rerun-if-changed={dst}");
     }
 
@@ -126,12 +126,12 @@ pub fn download(add_link_search: bool) -> anyhow::Result<()> {
                 if dst.is_symlink() {
                     fs_err::remove_file(dst)?;
                 }
-                symlink_or_copy(lib_path, dst)?;
+                symlink_or_copy(&lib_path, dst)?;
             }
             println!("cargo::rerun-if-changed={dst}");
         }
     }
-    Ok(())
+    Ok(lib_path)
 }
 
 fn lib_versioned_file_name(version: &str) -> anyhow::Result<String> {
@@ -181,7 +181,7 @@ fn verify(content: &[u8], expected_sha256: &[u8; 32]) -> anyhow::Result<()> {
 }
 
 fn extract_lib(tgz: &[u8], lib_name: &str) -> anyhow::Result<Vec<u8>> {
-    return binstall_tar::Archive::new(flate2::read::GzDecoder::new(tgz))
+    return tar::Archive::new(flate2::read::GzDecoder::new(tgz))
         .entries()?
         .map(|entry| {
             let entry = entry?;
@@ -199,7 +199,7 @@ fn extract_lib(tgz: &[u8], lib_name: &str) -> anyhow::Result<Vec<u8>> {
         .exactly_one()
         .map_err(|_| anyhow!("could not find 'lib/{lib_name}' in the asset"));
 
-    fn read_bytes<'a>(entry: binstall_tar::Entry<'a, impl Read + 'a>) -> io::Result<Vec<u8>> {
+    fn read_bytes<'a>(entry: tar::Entry<'a, impl Read + 'a>) -> io::Result<Vec<u8>> {
         let mut buf = Vec::with_capacity(entry.size() as _);
         { entry }.read_to_end(&mut buf)?;
         Ok(buf)

@@ -15,10 +15,10 @@ use super::super::{
 /// splitting the decoder at its mel bottleneck while loading (`azalea` fork).
 ///
 /// It never appears in a manifest: [`TalkDomain`]'s models are rewritten into it, and the
-/// talk domain is dropped. Native split decoders keep using [`ExperimentalTalkDomain`].
+/// talk domain is dropped. Native split decoders keep using [`StreamingTalkDomain`].
 ///
 /// [`TalkDomain`]: super::TalkDomain
-/// [`ExperimentalTalkDomain`]: super::ExperimentalTalkDomain
+/// [`StreamingTalkDomain`]: super::StreamingTalkDomain
 pub(crate) enum SplitTalkDomain {}
 
 impl InferenceDomain for SplitTalkDomain {

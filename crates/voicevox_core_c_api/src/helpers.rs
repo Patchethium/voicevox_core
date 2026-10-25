@@ -8,8 +8,9 @@ use std::{
 use typed_floats::{NonNaNFinite, PositiveFinite};
 use uuid::Uuid;
 use voicevox_core::{
-    __internal::interop::Validate, AccelerationMode, AccentPhrase, AudioQuery, FrameAudioQuery,
-    FramePhoneme, Mora, Note, Score, UserDictWord, VoiceModelId,
+    __internal::interop::{InvalidWordError, Validate},
+    AccelerationMode, AccentPhrase, AudioQuery, FrameAudioQuery, FramePhoneme, Mora, Note, Score,
+    UserDictWord, VoiceModelId,
 };
 
 use duplicate::duplicate_item;
@@ -18,7 +19,8 @@ use thiserror::Error;
 use tracing::error;
 
 use crate::{
-    VoicevoxAccelerationMode, VoicevoxInitializeOptions, VoicevoxSynthesisOptions,
+    VoicevoxAccelerationMode, VoicevoxAudioQueryFrameLengthOptions, VoicevoxInitializeOptions,
+    VoicevoxLoadVoiceModelOptions, VoicevoxOnExistingVoiceModelId, VoicevoxSynthesisOptions,
     VoicevoxTtsOptions, VoicevoxUserDictWord, VoicevoxUserDictWordType,
     result_code::VoicevoxResultCode,
 };
@@ -42,7 +44,7 @@ pub(crate) fn into_result_code_with_error(result: CApiResult<()>) -> VoicevoxRes
                 InitInferenceRuntime => VOICEVOX_RESULT_INIT_INFERENCE_RUNTIME_ERROR,
                 OpenZipFile => VOICEVOX_RESULT_OPEN_ZIP_FILE_ERROR,
                 ReadZipEntry => VOICEVOX_RESULT_READ_ZIP_ENTRY_ERROR,
-                InvalidModelFormat => VOICEVOX_RESULT_INVALID_MODEL_HEADER_ERROR,
+                InvalidModelFormat => VOICEVOX_RESULT_INVALID_MODEL_FORMAT_ERROR,
                 ModelAlreadyLoaded => VOICEVOX_RESULT_MODEL_ALREADY_LOADED_ERROR,
                 StyleAlreadyLoaded => VOICEVOX_RESULT_STYLE_ALREADY_LOADED_ERROR,
                 InvalidModelData => VOICEVOX_RESULT_INVALID_MODEL_DATA_ERROR,
@@ -74,6 +76,9 @@ pub(crate) fn into_result_code_with_error(result: CApiResult<()>) -> VoicevoxRes
             Err(InvalidNote(_)) => VOICEVOX_RESULT_INVALID_NOTE_ERROR,
             Err(InvalidFrameAudioQuery(_)) => VOICEVOX_RESULT_INVALID_FRAME_AUDIO_QUERY_ERROR,
             Err(InvalidFramePhoneme(_)) => VOICEVOX_RESULT_INVALID_FRAME_PHONEME_ERROR,
+            Err(StartOutOfBounds { .. }) => VOICEVOX_RESULT_START_OUT_OF_BOUNDS_ERROR,
+            Err(EndOutOfBounds { .. }) => VOICEVOX_RESULT_END_OUT_OF_BOUNDS_ERROR,
+            Err(StartExceedsEnd { .. }) => VOICEVOX_RESULT_START_EXCEEDS_END_ERROR,
             Err(InvalidUuid(_)) => VOICEVOX_RESULT_INVALID_UUID_ERROR,
         }
     }
@@ -109,8 +114,20 @@ pub(crate) enum CApiError {
     InvalidFrameAudioQuery(Either<serde_json::Error, String>),
     #[error("無効なFramePhonemeです: {0}")]
     InvalidFramePhoneme(Either<serde_json::Error, String>),
+    #[error("始端の値が大きすぎます: {start} for {len}")]
+    StartOutOfBounds { start: usize, len: usize },
+    #[error("終端の値が大きすぎます: {end} for {len}")]
+    EndOutOfBounds { end: usize, len: usize },
+    #[error("始端が終端を超過しています: {start} > {end}")]
+    StartExceedsEnd { start: usize, end: usize },
     #[error("無効なUUIDです: {0}")]
     InvalidUuid(uuid::Error),
+}
+
+impl From<InvalidWordError> for CApiError {
+    fn from(err: InvalidWordError) -> Self {
+        Self::RustApi(err.into())
+    }
 }
 
 pub(crate) trait ValidateJson: Validate {
@@ -217,6 +234,46 @@ impl From<VoicevoxAccelerationMode> for voicevox_core::AccelerationMode {
     }
 }
 
+impl From<VoicevoxOnExistingVoiceModelId> for voicevox_core::OnExistingVoiceModelId {
+    fn from(value: VoicevoxOnExistingVoiceModelId) -> Self {
+        use VoicevoxOnExistingVoiceModelId::*;
+        match value {
+            VOICEVOX_ON_EXISTING_VOICE_MODEL_ID_ERROR => Self::Error,
+            VOICEVOX_ON_EXISTING_VOICE_MODEL_ID_RELOAD => Self::Reload,
+            VOICEVOX_ON_EXISTING_VOICE_MODEL_ID_SKIP => Self::Skip,
+        }
+    }
+}
+
+impl From<voicevox_core::OnExistingVoiceModelId> for VoicevoxOnExistingVoiceModelId {
+    fn from(value: voicevox_core::OnExistingVoiceModelId) -> Self {
+        use voicevox_core::OnExistingVoiceModelId::*;
+        match value {
+            Error => Self::VOICEVOX_ON_EXISTING_VOICE_MODEL_ID_ERROR,
+            Reload => Self::VOICEVOX_ON_EXISTING_VOICE_MODEL_ID_RELOAD,
+            Skip => Self::VOICEVOX_ON_EXISTING_VOICE_MODEL_ID_SKIP,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Default for VoicevoxAudioQueryFrameLengthOptions {
+    fn default() -> Self {
+        Self {
+            enable_interrogative_upspeak:
+                voicevox_core::__internal::interop::DEFAULT_ENABLE_INTERROGATIVE_UPSPEAK,
+        }
+    }
+}
+
+impl Default for VoicevoxLoadVoiceModelOptions {
+    fn default() -> Self {
+        Self {
+            on_existing: voicevox_core::OnExistingVoiceModelId::default().into(),
+        }
+    }
+}
+
 impl Default for VoicevoxInitializeOptions {
     fn default() -> Self {
         Self {
@@ -263,7 +320,12 @@ impl VoicevoxUserDictWord {
 
         UserDictWord::builder()
             .word_type(self.word_type.into())
-            .priority(self.priority)
+            .priority(self.priority.try_into().map_err(|_| {
+                InvalidWordError::PriorityOutOfBounds {
+                    is_validation_of_whole_word: true,
+                    actual: self.priority.into(),
+                }
+            })?)
             .build(
                 ensure_utf8(surface)?,
                 ensure_utf8(pronunciation)?.to_string(),

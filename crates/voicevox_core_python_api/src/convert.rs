@@ -4,8 +4,9 @@ use camino::Utf8PathBuf;
 use derive_more::From;
 use easy_ext::ext;
 use heck::{ToLowerCamelCase as _, ToSnakeCase as _};
+use num_bigint::BigInt;
 use pyo3::{
-    Bound, FromPyObject, IntoPyObject, PyAny, PyErr, PyResult, Python,
+    Bound, FromPyObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
     exceptions::{PyException, PyValueError},
     types::{
         IntoPyDict as _, PyAnyMethods as _, PyDict, PyDictMethods as _, PyList, PyListMethods as _,
@@ -16,14 +17,14 @@ use ref_cast::RefCast;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::json;
 use voicevox_core::{
-    __internal::interop::{ToJsonValue as _, Validate},
-    AccelerationMode, AccentPhrase, AudioQuery, FrameAudioQuery, SupportedDevices, UserDictWord,
-    VoiceModelMeta,
+    __internal::interop::{self, AudioSegmentation, ToJsonValue as _, Validate},
+    AccelerationMode, AccentPhrase, AudioQuery, FrameAudioQuery, OnExistingVoiceModelId,
+    SupportedDevices, UserDictWord, UserDictWordPriority, VoiceModelMeta,
 };
 
 use crate::{
-    _ReservedFields, AnalyzeTextError, GetSupportedDevicesError, GpuSupportError,
-    IncompatibleQueriesError, InitInferenceRuntimeError, InvalidModelDataError,
+    _ReservedFields, AnalyzeTextError, AudioFeature, AudioFeatureSlice, GetSupportedDevicesError,
+    GpuSupportError, IncompatibleQueriesError, InitInferenceRuntimeError, InvalidModelDataError,
     InvalidModelFormatError, InvalidQueryError, InvalidWordError, LoadUserDictError,
     ModelAlreadyLoadedError, ModelNotFoundError, NotLoadedOpenjtalkDictError, OpenZipFileError,
     ParseKanaError, ReadZipEntryError, RunModelError, SaveUserDictError, StyleAlreadyLoadedError,
@@ -38,6 +39,20 @@ pub(crate) fn from_acceleration_mode(ob: &Bound<'_, PyAny>) -> PyResult<Accelera
         mode => Err(PyValueError::new_err(format!(
             "`AccelerationMode` should be one of {{AUTO, CPU, GPU}}: {mode}",
             mode = PyString::new(ob.py(), mode).repr()?,
+        ))),
+    }
+}
+
+pub(crate) fn from_on_existing_voice_model_id(
+    ob: &Bound<'_, PyAny>,
+) -> PyResult<OnExistingVoiceModelId> {
+    match ob.extract::<&str>()? {
+        "ERROR" => Ok(OnExistingVoiceModelId::Error),
+        "RELOAD" => Ok(OnExistingVoiceModelId::Reload),
+        "SKIP" => Ok(OnExistingVoiceModelId::Skip),
+        on_existing => Err(PyValueError::new_err(format!(
+            "`OnExistingVoiceModelId` should be one of {{ERROR, RELOAD, SKIP}}: {on_existing}",
+            on_existing = PyString::new(ob.py(), on_existing).repr()?,
         ))),
     }
 }
@@ -83,6 +98,41 @@ pub(crate) fn from_accent_phrases(ob: &Bound<'_, PyAny>) -> PyResult<Vec<AccentP
         .iter()
         .map(|p| from_query_like_via_serde(&p))
         .collect()
+}
+
+#[derive(FromPyObject)]
+pub(crate) enum ToAudioFeatureSlice {
+    AudioFeature(Py<AudioFeature>),
+    AudioFeatureSlice(Py<AudioFeatureSlice>),
+}
+
+impl ToAudioFeatureSlice {
+    pub(crate) fn get(&self) -> voicevox_core::AudioFeatureSlice<'_> {
+        match self {
+            Self::AudioFeature(audio) => (&audio.get().audio).into(),
+            Self::AudioFeatureSlice(audio) => audio.get().as_rust_api(),
+        }
+    }
+}
+
+pub(crate) fn validate_audio_segmentation(
+    enable_interrogative_upspeak: bool,
+    start_offset_in_secs: f64,
+    segment_length_in_secs: f64,
+    audio_query: &AudioQuery,
+) -> PyResult<()> {
+    AudioSegmentation {
+        start_offset_in_secs,
+        segment_length_in_secs,
+    }
+    .validate(
+        audio_query
+            .frame_length()
+            .enable_interrogative_upspeak(enable_interrogative_upspeak)
+            .calculate()
+            .0,
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
 pub(crate) fn from_utf8_path(ob: &Bound<'_, PyAny>) -> PyResult<Utf8PathBuf> {
@@ -320,9 +370,21 @@ fn to_dataclass_via_serde<'py>(
 pub(crate) fn to_rust_user_dict_word(
     ob: &Bound<'_, PyAny>,
 ) -> PyResult<voicevox_core::UserDictWord> {
+    let priority = ob.getattr("priority")?.extract::<BigInt>()?;
+    let priority = (&priority)
+        .try_into()
+        .ok()
+        .and_then(|priority| UserDictWordPriority::new(priority).ok())
+        .ok_or(interop::InvalidWordError::PriorityOutOfBounds {
+            is_validation_of_whole_word: true,
+            actual: priority,
+        })
+        .map_err(voicevox_core::Error::from)
+        .into_py_result(ob.py())?;
+
     voicevox_core::UserDictWord::builder()
         .word_type(from_literal_choice(ob.getattr("word_type")?.extract()?)?)
-        .priority(ob.getattr("priority")?.extract()?)
+        .priority(priority)
         .build(
             ob.getattr("surface")?.extract()?,
             ob.getattr("pronunciation")?.extract()?,
@@ -350,7 +412,7 @@ fn to_py_user_dict_word<'py>(
                     .as_str()
                     .expect("should be a string"),
             )?;
-            kwargs.set_item("priority", word.priority())?;
+            kwargs.set_item("priority", word.priority().get())?;
             kwargs
         }),
     )

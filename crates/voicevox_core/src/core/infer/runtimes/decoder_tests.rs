@@ -1,6 +1,5 @@
 use super::*;
-use crate::synthesizer::MARGIN;
-use std::time::Instant;
+use crate::core::adjust::MARGIN;
 
 type Session = Arc<async_lock::Mutex<ort::session::Session>>;
 
@@ -295,12 +294,14 @@ fn rejects_non_decoder_models() -> anyhow::Result<()> {
 }
 
 /// Explicit local diagnostic; production models are never fixtures or exported persistently.
+#[cfg(feature = "load-onnxruntime")]
 #[test]
 #[ignore = "set AZALEA_DECODER_ORT and AZALEA_DECODER_VVM_DIR; run in a separate test process"]
 fn installed_decoder_diagnostic() -> anyhow::Result<()> {
     use crate::{
         blocking::VoiceModelFile, core::infer::domains::TalkOperation, future::FutureExt as _,
     };
+    use std::time::Instant;
     let rt = blocking::Onnxruntime::load_once()
         .filename(std::env::var("AZALEA_DECODER_ORT")?)
         .perform()?;

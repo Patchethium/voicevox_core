@@ -45,6 +45,8 @@ jobs:
   build-downloader:
     needs: config
     environment: ${{ inputs.code_signing && 'code_signing' || '' }} # コード署名用のenvironment
+    permissions:
+      contents: write
     strategy:
       matrix:
         include:
@@ -71,7 +73,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install cross compiler for aarch64-unknown-linux-gnu
         if: matrix.target == 'aarch64-unknown-linux-gnu'
@@ -85,16 +87,20 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@cargo-binstall
+        uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-binstall
 
       - name: Install cargo-edit
-        # cargo-binstall だと quickinstall の不具合 (cargo-bins/cargo-quickinstall#466) で cargo-edit v0.13 系の導入が失敗する。
-        # かつ Rust 1.88 環境では smol_str v0.3.4 の影響で --locked なしの cargo install が失敗するため、--locked で固定インストールする。
-        # TODO: cargo-edit v0.13.8 / v0.14.0 がリリースされ、 quickinstall に正しくホストされたら cargo-binstall に戻す。
-        run: cargo install cargo-edit@^0.13 -v --locked
+        # https://github.com/cargo-bins/cargo-quickinstall/releases/tag/cargo-edit-0.13.13
+        run: cargo binstall cargo-edit@0.13.13 --no-confirm --log-level debug
 
       - name: Set version
         run: cargo set-version ${{ needs.config.outputs.version }} --exclude voicevox_core_python_api --exclude xtask
+
+      - name: set deployment target
+        if: contains(matrix.target, '-apple-')
+        run: rustc --target=${{ matrix.target }} --print=deployment-target >> "$GITHUB_ENV"
 
       - name: Build downloader
         run: cargo build -v --release -p downloader --target ${{ matrix.target }}

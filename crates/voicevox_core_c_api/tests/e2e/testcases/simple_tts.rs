@@ -114,7 +114,13 @@ impl assert_cdylib::TestCase for TestCase {
         };
 
         // SAFETY: `voicevox_synthesizer_load_voice_model` has no safety requirements.
-        assert_ok(unsafe { lib.voicevox_synthesizer_load_voice_model(synthesizer, model) });
+        assert_ok(unsafe {
+            lib.voicevox_synthesizer_load_voice_model(
+                synthesizer,
+                model,
+                lib.voicevox_make_default_load_voice_model_options(),
+            )
+        });
 
         let (wav_length, wav) = {
             let mut wav_length = MaybeUninit::uninit();
@@ -152,7 +158,7 @@ impl assert_cdylib::TestCase for TestCase {
         unsafe { lib.voicevox_synthesizer_delete(synthesizer) };
 
         // SAFETY: `wav` is valid and is no longer used.
-        unsafe { lib.voicevox_wav_free(wav) };
+        unsafe { lib.voicevox_bytes_free(wav) };
 
         return Ok(());
 
@@ -166,7 +172,7 @@ impl assert_cdylib::TestCase for TestCase {
     fn assert_output(&self, output: Utf8Output) -> AssertResult {
         output
             .mask_timestamps()
-            .mask_onnxruntime_filename()
+            .mask_unix_onnxruntime_filename()
             .mask_windows_video_cards()
             .assert()
             .try_success()?

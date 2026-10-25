@@ -7,9 +7,6 @@ use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-#[cfg(feature = "specta")]
-use specta::Type;
-
 /// [`speaker_uuid`]をキーとして複数の[`CharacterMeta`]をマージする。
 ///
 /// マージする際キャラクターは[`CharacterMeta::order`]、スタイルは[`StyleMeta::order`]をもとに安定ソートされる。
@@ -47,7 +44,7 @@ pub fn merge<'a>(metas: impl IntoIterator<Item = &'a CharacterMeta>) -> Vec<Char
 ///
 /// [<i>キャラクター</i>]: CharacterMeta
 /// [<i>スタイル</i>]: StyleMeta
-#[cfg_attr(feature = "specta", derive(Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[derive(
     PartialEq,
     Eq,
@@ -68,8 +65,8 @@ pub fn merge<'a>(metas: impl IntoIterator<Item = &'a CharacterMeta>) -> Vec<Char
     Octal,
     Binary,
 )]
-// #[cfg_attr(doc, doc(alias = "VoicevoxStyleId"))] // remove the doc can please specta, I don't know why
-pub struct StyleId(pub u32); // rust-analyzer may produce an error here, but cargo check seems happy.
+#[cfg_attr(all(doc, not(feature = "specta")), doc(alias = "VoicevoxStyleId"))]
+pub struct StyleId(pub u32);
 
 impl Display for StyleId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -80,11 +77,11 @@ impl Display for StyleId {
 /// [<i>キャラクター</i>]のバージョン。
 ///
 /// [<i>キャラクター</i>]: CharacterMeta
-#[cfg_attr(feature = "specta", derive(Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[derive(
     PartialEq, Eq, Clone, Ord, PartialOrd, Deserialize, Serialize, new, Hash, Debug, AsRef, AsMut,
 )]
-pub struct CharacterVersion(pub String); // same issue as StyleId.
+pub struct CharacterVersion(pub String);
 
 impl Display for CharacterVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -96,7 +93,7 @@ impl Display for CharacterVersion {
 pub type VoiceModelMeta = Vec<CharacterMeta>;
 
 /// <i>キャラクター</i>のメタ情報。
-#[cfg_attr(feature = "specta", derive(Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[non_exhaustive]
 pub struct CharacterMeta {
@@ -157,7 +154,7 @@ impl CharacterMeta {
 }
 
 /// <i>スタイル</i>のメタ情報。
-#[cfg_attr(feature = "specta", derive(Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
 #[non_exhaustive]
 pub struct StyleMeta {
@@ -182,7 +179,7 @@ pub struct StyleMeta {
 ///
 /// [<i>スタイル</i>]: StyleMeta
 /// [Serde]: serde
-#[cfg_attr(feature = "specta", derive(Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[derive(
     Default,
     Clone,
@@ -237,6 +234,175 @@ pub enum StyleType {
     ///
     /// [Serde]: serde
     Sing,
+
+    /// 音声合成クエリの作成と通常ないしストリーミングでの音声合成が可能。
+    /// Talkスタイルの機能を包含する。
+    ///
+    /// # Serde
+    ///
+    /// [Serde]においては`"streaming_talk"`という値で表される。
+    ///
+    /// [Serde]: serde
+    StreamingTalk,
+}
+
+/// 音声モデルのメタ情報スキーマ（vvm_format_version=2形式）
+pub(super) type VoiceModelMetaSchemaV2 = Vec<CharacterMetaSchemaV2>;
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub(super) struct CharacterMetaSchemaV2 {
+    name: String,
+    styles: Vec<StyleMetaSchemaV2>,
+    version: CharacterVersion,
+    speaker_uuid: String,
+    order: Option<u32>,
+}
+#[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
+struct StyleMetaSchemaV2 {
+    id: StyleId,
+    name: String,
+    #[serde(default)]
+    r#type: StyleTypeSchemaV2,
+    order: Option<u32>,
+}
+
+#[derive(
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Debug,
+    strum::Display,
+    Deserialize,
+    Serialize,
+)]
+#[strum(serialize_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+enum StyleTypeSchemaV2 {
+    #[default]
+    Talk,
+    SingingTeacher,
+    FrameDecode,
+    Sing,
+    StreamingTalk,
+}
+
+impl From<StyleTypeSchemaV2> for StyleType {
+    fn from(value: StyleTypeSchemaV2) -> Self {
+        match value {
+            StyleTypeSchemaV2::Talk => Self::Talk,
+            StyleTypeSchemaV2::SingingTeacher => Self::SingingTeacher,
+            StyleTypeSchemaV2::FrameDecode => Self::FrameDecode,
+            StyleTypeSchemaV2::Sing => Self::Sing,
+            StyleTypeSchemaV2::StreamingTalk => Self::StreamingTalk,
+        }
+    }
+}
+
+impl From<StyleMetaSchemaV2> for StyleMeta {
+    fn from(value: StyleMetaSchemaV2) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+            r#type: value.r#type.into(),
+            order: value.order,
+        }
+    }
+}
+
+impl From<CharacterMetaSchemaV2> for CharacterMeta {
+    fn from(value: CharacterMetaSchemaV2) -> Self {
+        Self {
+            name: value.name,
+            styles: value.styles.into_iter().map(Into::into).collect(),
+            version: value.version,
+            speaker_uuid: value.speaker_uuid,
+            order: value.order,
+        }
+    }
+}
+
+/// 音声モデルのメタ情報スキーマ（vvm_format_version=1形式）
+pub(super) type VoiceModelMetaSchemaV1 = Vec<CharacterMetaSchemaV1>;
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub(super) struct CharacterMetaSchemaV1 {
+    name: String,
+    styles: Vec<StyleMetaSchemaV1>,
+    version: CharacterVersion,
+    speaker_uuid: String,
+    order: Option<u32>,
+}
+
+#[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
+struct StyleMetaSchemaV1 {
+    id: StyleId,
+    name: String,
+    #[serde(default)]
+    r#type: StyleTypeSchemaV1,
+    order: Option<u32>,
+}
+
+#[derive(
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Debug,
+    strum::Display,
+    Deserialize,
+    Serialize,
+)]
+#[strum(serialize_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+enum StyleTypeSchemaV1 {
+    #[default]
+    Talk,
+    SingingTeacher,
+    FrameDecode,
+    Sing,
+}
+
+impl From<StyleTypeSchemaV1> for StyleType {
+    fn from(value: StyleTypeSchemaV1) -> Self {
+        match value {
+            StyleTypeSchemaV1::Talk => Self::Talk,
+            StyleTypeSchemaV1::SingingTeacher => Self::SingingTeacher,
+            StyleTypeSchemaV1::FrameDecode => Self::FrameDecode,
+            StyleTypeSchemaV1::Sing => Self::Sing,
+        }
+    }
+}
+
+impl From<StyleMetaSchemaV1> for StyleMeta {
+    fn from(value: StyleMetaSchemaV1) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+            r#type: value.r#type.into(),
+            order: value.order,
+        }
+    }
+}
+
+impl From<CharacterMetaSchemaV1> for CharacterMeta {
+    fn from(value: CharacterMetaSchemaV1) -> Self {
+        Self {
+            name: value.name,
+            styles: value.styles.into_iter().map(Into::into).collect(),
+            version: value.version,
+            speaker_uuid: value.speaker_uuid,
+            order: value.order,
+        }
+    }
 }
 
 #[cfg(test)]

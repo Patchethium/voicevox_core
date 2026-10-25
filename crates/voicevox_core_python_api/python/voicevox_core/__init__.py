@@ -1,8 +1,5 @@
 """無料で使える中品質なテキスト読み上げソフトウェア、VOICEVOXのコア。"""
 
-# TODO: `wav_from_s16le`を復活させる
-# https://github.com/VOICEVOX/voicevox_core/issues/970
-
 from ._python import (  # noqa: F401
     AccelerationMode,
     AccentPhrase,
@@ -14,6 +11,7 @@ from ._python import (  # noqa: F401
     Mora,
     Note,
     NoteId,
+    OnExistingVoiceModelId,
     Score,
     StyleId,
     StyleMeta,
@@ -24,12 +22,16 @@ from ._python import (  # noqa: F401
     VoiceModelId,
 )
 from ._rust import (  # noqa: F401
+    FRAME_RATE,
     AnalyzeTextError,
+    AudioFeature,
+    AudioFeatureSlice,
     GetSupportedDevicesError,
     GpuSupportError,
     IncompatibleQueriesError,
     InitInferenceRuntimeError,
     InvalidModelDataError,
+    InvalidModelFormatError,
     InvalidQueryError,
     InvalidWordError,
     LoadUserDictError,
@@ -47,15 +49,19 @@ from ._rust import (  # noqa: F401
     WordNotFoundError,
     __version__,
     ensure_compatible,
+    wav_from_s16le,
 )
 
 from . import asyncio, blocking  # noqa: F401 isort: skip
 
 __all__ = [
+    "FRAME_RATE",
     "__version__",
     "AccelerationMode",
     "AccentPhrase",
     "AnalyzeTextError",
+    "AudioFeature",
+    "AudioFeatureSlice",
     "AudioQuery",
     "asyncio",
     "blocking",
@@ -68,6 +74,7 @@ __all__ = [
     "IncompatibleQueriesError",
     "InitInferenceRuntimeError",
     "InvalidModelDataError",
+    "InvalidModelFormatError",
     "InvalidQueryError",
     "InvalidWordError",
     "LoadUserDictError",
@@ -77,6 +84,7 @@ __all__ = [
     "NotLoadedOpenjtalkDictError",
     "Note",
     "NoteId",
+    "OnExistingVoiceModelId",
     "OpenZipFileError",
     "ParseKanaError",
     "ReadZipEntryError",
@@ -95,4 +103,5 @@ __all__ = [
     "VoiceModelId",
     "WordNotFoundError",
     "ensure_compatible",
+    "wav_from_s16le",
 ]

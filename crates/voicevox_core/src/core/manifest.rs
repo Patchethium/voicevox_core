@@ -15,13 +15,14 @@ use crate::{StyleId, VoiceModelId};
 
 use super::infer::{
     InferenceDomain,
-    domains::{InferenceDomainMap, inference_domain_map_values},
+    domains::{
+        FrameDecodeDomain, InferenceDomainMap, SingingTeacherDomain, TalkDomain,
+        inference_domain_map_values,
+    },
 };
 
-#[derive(Clone, Debug)]
-struct FormatVersionV1;
-
-impl<'de> Deserialize<'de> for FormatVersionV1 {
+// vvm_format_versionの値に応じたスキーマでパースし現行のManifestに詰めなおす
+impl<'de> Deserialize<'de> for Manifest {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -30,23 +31,46 @@ impl<'de> Deserialize<'de> for FormatVersionV1 {
 
         struct Visitor;
 
-        impl de::Visitor<'_> for Visitor {
-            type Value = FormatVersionV1;
+        impl<'de> de::Visitor<'de> for Visitor {
+            type Value = Manifest;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("an unsigned integer")
+                formatter.write_str("an unsigned integer 'vvm_format_version' field")
             }
 
-            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
             where
-                E: de::Error,
+                A: de::MapAccess<'de>,
             {
-                match v {
-                    1 => Ok(FormatVersionV1),
-                    v => Err(E::custom(format!(
-                        "未知の形式です（`vvm_format_version={v}`）。新しいバージョンのVOICEVOX \
-                         COREであれば対応しているかもしれません",
-                    ))),
+                let mut root = serde_json::Map::new();
+                let mut vvm_format_version = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "vvm_format_version" {
+                        let value = map.next_value::<serde_json::Value>()?;
+                        vvm_format_version =
+                            Some(FormatVersion::deserialize(&value).map_err(de::Error::custom)?);
+                        root.insert(key, value);
+                    } else {
+                        let value = map.next_value::<serde_json::Value>()?;
+                        root.insert(key, value);
+                    }
+                }
+                let vvm_format_version = vvm_format_version
+                    .ok_or_else(|| de::Error::missing_field("vvm_format_version"))?;
+                let content_value = serde_json::Value::Object(root);
+
+                match vvm_format_version {
+                    FormatVersion::V1 => {
+                        let data = ManifestSchemaV1::deserialize(content_value)
+                            .map_err(de::Error::custom)?;
+                        Ok(data.into())
+                    }
+                    FormatVersion::V2 => {
+                        let data = ManifestSchemaV2::deserialize(content_value)
+                            .map_err(de::Error::custom)?;
+                        Ok(data.into())
+                    }
                 }
             }
         }
@@ -54,13 +78,13 @@ impl<'de> Deserialize<'de> for FormatVersionV1 {
 }
 
 /// モデル内IDの実体
-pub type RawInnerVoiceId = u32;
+type RawInnerVoiceId = u32;
 /// モデル内ID
 #[derive(PartialEq, Eq, Clone, Copy, Ord, PartialOrd, Deserialize, Serialize, new, Debug)]
-pub struct InnerVoiceId(RawInnerVoiceId);
+pub(crate) struct InnerVoiceId(RawInnerVoiceId);
 
 impl InnerVoiceId {
-    pub fn raw_id(self) -> RawInnerVoiceId {
+    pub(crate) fn raw_id(self) -> RawInnerVoiceId {
         self.0
     }
 }
@@ -71,14 +95,85 @@ impl Display for InnerVoiceId {
     }
 }
 
-#[derive(Debug, Deserialize, Getters)]
-pub struct Manifest {
-    #[expect(dead_code, reason = "現状はバリデーションのためだけに存在")]
-    vvm_format_version: FormatVersionV1,
+/// 現在有効なManifestのバージョン
+#[derive(Clone, Debug)]
+pub(super) enum FormatVersion {
+    V1,
+    V2,
+}
+
+impl<'de> Deserialize<'de> for FormatVersion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let v = u64::deserialize(deserializer)?;
+        match v {
+            1 => Ok(FormatVersion::V1),
+            2 => Ok(FormatVersion::V2),
+            _ => Err(de::Error::custom(format!(
+                "未知の形式です（`vvm_format_version={v}`）。新しいバージョンのVOICEVOX \
+                 COREであれば対応しているかもしれません",
+            ))),
+        }
+    }
+}
+
+/// voicevox_coreで使われているManifest
+#[derive(Debug, Getters)]
+pub(super) struct Manifest {
+    vvm_format_version: FormatVersion, // この値は固定ではない。バージョンに応じてmetasの構造やバリデーションが変化する。
     pub(super) id: VoiceModelId,
+    metas_filename: String,
+    domains: InferenceDomainMap<ManifestDomains>,
+}
+
+/// 現行（vvm_format_version=2）のManifestスキーマ
+#[derive(Debug, Deserialize)]
+struct ManifestSchemaV2 {
+    vvm_format_version: FormatVersion,
+    id: VoiceModelId,
     metas_filename: String,
     #[serde(flatten)]
     domains: InferenceDomainMap<ManifestDomains>,
+}
+
+impl From<ManifestSchemaV2> for Manifest {
+    fn from(schema: ManifestSchemaV2) -> Self {
+        Self {
+            vvm_format_version: schema.vvm_format_version,
+            id: schema.id,
+            metas_filename: schema.metas_filename,
+            domains: schema.domains,
+        }
+    }
+}
+
+/// 互換性維持のために残している旧式（vvm_format_version=1）のManifestスキーマ
+#[derive(Debug, Deserialize)]
+struct ManifestSchemaV1 {
+    vvm_format_version: FormatVersion,
+    id: VoiceModelId,
+    metas_filename: String,
+    talk: Option<ManifestDomain<TalkDomain>>,
+    singing_teacher: Option<ManifestDomain<SingingTeacherDomain>>,
+    frame_decode: Option<ManifestDomain<FrameDecodeDomain>>,
+}
+
+impl From<ManifestSchemaV1> for Manifest {
+    fn from(schema: ManifestSchemaV1) -> Self {
+        Self {
+            vvm_format_version: schema.vvm_format_version,
+            id: schema.id,
+            metas_filename: schema.metas_filename,
+            domains: InferenceDomainMap {
+                talk: schema.talk,
+                streaming_talk: None,
+                singing_teacher: schema.singing_teacher,
+                frame_decode: schema.frame_decode,
+            },
+        }
+    }
 }
 
 pub(super) type ManifestDomains = inference_domain_map_values!(for<D> Option<ManifestDomain<D>>);
@@ -86,7 +181,7 @@ pub(super) type ManifestDomains = inference_domain_map_values!(for<D> Option<Man
 #[derive(derive_more::Debug, Index, Deserialize)]
 #[cfg_attr(test, derive(educe::Educe), educe(Default))]
 #[debug(bounds(D::Operation: Debug))]
-pub(crate) struct ManifestDomain<D: InferenceDomain> {
+pub(super) struct ManifestDomain<D: InferenceDomain> {
     #[index]
     #[serde(flatten)]
     filenames: EnumMap<D::Operation, ModelFile>,
@@ -96,7 +191,7 @@ pub(crate) struct ManifestDomain<D: InferenceDomain> {
 }
 
 #[derive(Deserialize, Clone, Debug)]
-pub(crate) struct ModelFile {
+pub(super) struct ModelFile {
     pub(super) r#type: ModelFileType,
     pub(super) filename: Arc<str>,
 }
@@ -130,33 +225,33 @@ pub(crate) struct StyleIdToInnerVoiceId(
 mod tests {
     use std::ops::Deref;
 
+    use crate::core::manifest::Manifest;
     use rstest::rstest;
-    use serde::Deserialize;
-
-    use super::FormatVersionV1;
 
     #[rstest]
-    #[case("{\"vvm_format_version\":1}", Ok(()))]
+    #[case("{\"vvm_format_version\": 1,
+        \"id\": \"a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8\",
+        \"metas_filename\": \"metas.json\"}",
+        Ok(()))]
+    #[case("{\"vvm_format_version\": 2,
+        \"id\": \"a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8\",
+        \"metas_filename\": \"metas.json\"}",
+        Ok(()))]
     #[case(
-        "{\"vvm_format_version\":2}",
+        "{\"vvm_format_version\": 3,
+        \"id\": \"a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8\",
+        \"metas_filename\": \"metas.json\"}",
         Err(
-            "未知の形式です（`vvm_format_version=2`）。新しいバージョンのVOICEVOX COREであれば対応\
-             しているかもしれません at line 1 column 23",
+            "未知の形式です（`vvm_format_version=3`）。新しいバージョンのVOICEVOX COREであれば対応しているかもしれません at line 1 column 24"
         )
     )]
     fn vvm_format_version_works(
         #[case] input: &str,
         #[case] expected: Result<(), &str>,
     ) -> anyhow::Result<()> {
-        let actual = serde_json::from_str::<ManifestPart>(input).map_err(|e| e.to_string());
+        let actual = serde_json::from_str::<Manifest>(input).map_err(|e| e.to_string());
         let actual = actual.as_ref().map(|_| ()).map_err(Deref::deref);
         assert_eq!(expected, actual);
-        return Ok(());
-
-        #[derive(Deserialize)]
-        struct ManifestPart {
-            #[expect(dead_code, reason = "バリデーションのためだけに存在")]
-            vvm_format_version: FormatVersionV1,
-        }
+        Ok(())
     }
 }

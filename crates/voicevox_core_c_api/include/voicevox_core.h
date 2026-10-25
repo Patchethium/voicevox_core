@@ -90,6 +90,29 @@
 #error "`VOICEVOX_LINK_ONNXRUNTIME` or `VOICEVOX_LOAD_ONNXRUNTIME` cannot be enabled at the same time"
 #endif
 
+#if defined(_MSC_VER)
+#define VOICEVOX_DEPRECATED(note) __declspec(deprecated(note))
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L ||              \
+    defined(__cplusplus) && __cplusplus >= 201402L
+#define VOICEVOX_DEPRECATED(note) [[deprecated(note)]]
+#elif defined(__GNUC__) || defined(__clang__)
+#define VOICEVOX_DEPRECATED(note) __attribute__((deprecated(note)))
+#else
+#define VOICEVOX_DEPRECATED(note)
+#endif
+
+/**
+ * フレームレート。
+ *
+ * 音声の秒数は`frame_length / VOICEVOX_FRAME_RATE`で表せる。
+ *
+ * \note
+ * この定数は将来的に削除される可能性がある。例えば、<code><a href="../rust_api/voicevox_core/struct.StyleMeta.html">StyleMeta</a>::frame_rate</code>というフィールドに置き換えられる可能性がある。
+ *
+ * \orig-impl{VOICEVOX_FRAME_RATE}
+ */
+#define VOICEVOX_FRAME_RATE 93.75
+
 /**
  * ハードウェアアクセラレーションモードを設定する設定値。
  *
@@ -115,6 +138,33 @@ enum VoicevoxAccelerationMode
 };
 #ifndef __cplusplus
 typedef int32_t VoicevoxAccelerationMode;
+#endif // __cplusplus
+
+/**
+ * ::voicevox_synthesizer_load_voice_model の実行時に、同じIDの ::VoicevoxVoiceModelFile が既に読み込まれていたときのふるまい。
+ *
+ * \orig-impl{VoicevoxOnExistingVoiceModelId}
+ */
+enum VoicevoxOnExistingVoiceModelId
+#ifdef __cplusplus
+  : int32_t
+#endif // __cplusplus
+ {
+  /**
+   * エラーにする。デフォルトのふるまい
+   */
+  VOICEVOX_ON_EXISTING_VOICE_MODEL_ID_ERROR = 0,
+  /**
+   * 再読み込みする。VOICEVOX COREでは、長文のテキストを一度に音声合成するとCPU/GPUメモリが大量に占有されたままになる。再読み込みを行うとメモリの使用量が元に戻る
+   */
+  VOICEVOX_ON_EXISTING_VOICE_MODEL_ID_RELOAD = 1,
+  /**
+   * 何もしない
+   */
+  VOICEVOX_ON_EXISTING_VOICE_MODEL_ID_SKIP = 2,
+};
+#ifndef __cplusplus
+typedef int32_t VoicevoxOnExistingVoiceModelId;
 #endif // __cplusplus
 
 /**
@@ -190,7 +240,7 @@ enum VoicevoxResultCode
   /**
    * モデルの形式が不正
    */
-  VOICEVOX_RESULT_INVALID_MODEL_HEADER_ERROR = 28,
+  VOICEVOX_RESULT_INVALID_MODEL_FORMAT_ERROR = 28,
   /**
    * すでに読み込まれている音声モデルを読み込もうとした
    */
@@ -251,6 +301,18 @@ enum VoicevoxResultCode
    * 楽譜とFrameAudioQueryの組み合わせが不正
    */
   VOICEVOX_RESULT_INCOMPATIBLE_QUERIES_ERROR = 35,
+  /**
+   * AudioFeatureSliceをスライスするときの始端が大きすぎた
+   */
+  VOICEVOX_RESULT_START_OUT_OF_BOUNDS_ERROR = 36,
+  /**
+   * AudioFeatureSliceをスライスするときの終端が大きすぎた
+   */
+  VOICEVOX_RESULT_END_OUT_OF_BOUNDS_ERROR = 37,
+  /**
+   * AudioFeatureSliceをスライスするときに始端が終端を超えていた
+   */
+  VOICEVOX_RESULT_START_EXCEEDS_END_ERROR = 38,
 };
 #ifndef __cplusplus
 typedef int32_t VoicevoxResultCode;
@@ -313,6 +375,15 @@ typedef int32_t VoicevoxUserDictWordType;
 typedef struct OpenJtalkRc OpenJtalkRc;
 
 /**
+ * 音声合成用の中間表現。
+ *
+ * <b>構築</b>(_construction_)は ::voicevox_synthesizer_create_audio_feature で行い、<b>破棄</b>(_destruction_)は ::voicevox_audio_feature_delete で行う。
+ *
+ * \orig-impl{VoicevoxAudioFeature}
+ */
+typedef struct VoicevoxAudioFeature VoicevoxAudioFeature;
+
+/**
  * ONNX Runtime。
  *
  * シングルトンであり、インスタンスは高々一つ。
@@ -369,7 +440,7 @@ typedef struct VoicevoxLoadOnnxruntimeOptions {
   /**
    * ONNX Runtimeのファイル名（モジュール名）もしくはファイルパスを指定する。
    *
-   * `dlopen`/[`LoadLibraryExW`](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-loadlibraryexw)の引数に使われる。デフォルトは ::voicevox_get_onnxruntime_lib_versioned_filename と同じ。
+   * `dlopen`/[`LoadLibraryExW`](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-loadlibraryexw)の引数に使われる。デフォルトは ::voicevox_get_onnxruntime_lib_recommended_versioned_filename と同じ。
    */
   const char *filename;
 } VoicevoxLoadOnnxruntimeOptions;
@@ -391,6 +462,30 @@ typedef struct VoicevoxInitializeOptions {
    */
   uint16_t cpu_num_threads;
 } VoicevoxInitializeOptions;
+
+/**
+ * ::voicevox_audio_query_frame_length のオプション。
+ *
+ * \no-orig-impl{VoicevoxAudioQueryFrameLengthOptions}
+ */
+typedef struct VoicevoxAudioQueryFrameLengthOptions {
+  /**
+   * [`AccentPhrase::is_interrogative`](../rust_api/voicevox_core/struct.AccentPhrase.html#structfield.is_interrogative)を認識するかどうか
+   */
+  bool enable_interrogative_upspeak;
+} VoicevoxAudioQueryFrameLengthOptions;
+
+/**
+ * ::voicevox_synthesizer_load_voice_model のオプション。
+ *
+ * \no-orig-impl{VoicevoxLoadVoiceModelOptions}
+ */
+typedef struct VoicevoxLoadVoiceModelOptions {
+  /**
+   * 同じIDの ::VoicevoxVoiceModelFile が既に読み込まれていたときのふるまい
+   */
+  VoicevoxOnExistingVoiceModelId on_existing;
+} VoicevoxLoadVoiceModelOptions;
 
 /**
  * 音声モデルID。
@@ -433,6 +528,32 @@ typedef struct VoicevoxSynthesisOptions {
 } VoicevoxSynthesisOptions;
 
 /**
+ * ある ::VoicevoxAudioFeature 上の区間。
+ *
+ * この構造体は、`audio_feature`を破棄するかフィールドを編集したときのみ不正な状態になる。
+ *
+ * \orig-impl{VoicevoxAudioFeatureSlice}
+ */
+typedef struct VoicevoxAudioFeatureSlice {
+  /**
+   * 元の ::VoicevoxAudioFeature 。
+   *
+   * \orig-impl{VoicevoxAudioFeatureSlice::audio_feature}
+   */
+  const struct VoicevoxAudioFeature *audio_feature;
+  /**
+   * この ::VoicevoxAudioFeatureSlice の始端が、元の ::VoicevoxAudioFeature のどの箇所にあたるか。
+   *
+   * \orig-impl{VoicevoxAudioFeatureSlice::start_offset}
+   */
+  uintptr_t start_offset;
+  uintptr_t end;
+  bool end_is_inclusive;
+  bool clamp;
+  bool allow_start_exceeds_end;
+} VoicevoxAudioFeatureSlice;
+
+/**
  * ::voicevox_synthesizer_tts のオプション。
  *
  * \no-orig-impl{VoicevoxTtsOptions}
@@ -469,45 +590,76 @@ typedef struct VoicevoxUserDictWord {
   /**
    * 優先度
    */
-  uint32_t priority;
+  uint8_t priority;
 } VoicevoxUserDictWord;
 
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
 
+/**
+ * このライブラリにおいて、空の`uint8_t`の配列を表すポインタ。
+ *
+ * このポインタが指す先は未初期化の値であり、読み書きされるべきではない。
+ */
+extern const uint8_t *voicevox_empty_bytes;
+
+/**
+ * 必要なONNX Runtime 1.xの最小マイナーバージョンを取得する。
+ *
+ * @return 必要な最小マイナーバージョン
+ *
+ * \orig-impl{voicevox_get_onnxruntime_lib_min_required_minor_version}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+uint32_t voicevox_get_onnxruntime_lib_min_required_minor_version(void);
+
+/**
+ * サポートされるONNX Runtime 1.xの最大マイナーバージョンを取得する。
+ *
+ * @return サポートされる最大マイナーバージョン
+ *
+ * \orig-impl{voicevox_get_onnxruntime_lib_max_supported_minor_version}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+uint32_t voicevox_get_onnxruntime_lib_max_supported_minor_version(void);
+
 #if defined(VOICEVOX_LOAD_ONNXRUNTIME)
 /**
- * ONNX Runtimeの動的ライブラリの、バージョン付きのファイル名。
+ * 推奨されるONNX Runtimeの動的ライブラリの、バージョン付きのファイル名。
  *
- * WindowsとAndroidでは ::voicevox_get_onnxruntime_lib_unversioned_filename と同じ。
+ * WindowsとAndroidでは ::voicevox_get_onnxruntime_lib_recommended_unversioned_filename と同じ。
  *
  * \availability{
  *   [リリース](https://github.com/voicevox/voicevox_core/releases)されているライブラリではiOSを除くプラットフォームで利用可能。詳細は<a href="#voicevox-core-availability">ファイルレベルの"Availability"の節</a>を参照。
  * }
  *
- * \orig-impl{voicevox_get_onnxruntime_lib_versioned_filename}
+ * \orig-impl{voicevox_get_onnxruntime_lib_recommended_versioned_filename}
  */
 #ifdef _WIN32
 __declspec(dllimport)
 #endif
-const char *voicevox_get_onnxruntime_lib_versioned_filename(void);
+const char *voicevox_get_onnxruntime_lib_recommended_versioned_filename(void);
 #endif
 
 #if defined(VOICEVOX_LOAD_ONNXRUNTIME)
 /**
- * ONNX Runtimeの動的ライブラリの、バージョン無しのファイル名。
+ * 推奨されるONNX Runtimeの動的ライブラリの、バージョン無しのファイル名。
  *
  * \availability{
  *   [リリース](https://github.com/voicevox/voicevox_core/releases)されているライブラリではiOSを除くプラットフォームで利用可能。詳細は<a href="#voicevox-core-availability">ファイルレベルの"Availability"の節</a>を参照。
  * }
  *
- * \orig-impl{voicevox_get_onnxruntime_lib_unversioned_filename}
+ * \orig-impl{voicevox_get_onnxruntime_lib_recommended_unversioned_filename}
  */
 #ifdef _WIN32
 __declspec(dllimport)
 #endif
-const char *voicevox_get_onnxruntime_lib_unversioned_filename(void);
+const char *voicevox_get_onnxruntime_lib_recommended_unversioned_filename(void);
 #endif
 
 #if defined(VOICEVOX_LOAD_ONNXRUNTIME)
@@ -546,6 +698,8 @@ const struct VoicevoxOnnxruntime *voicevox_onnxruntime_get(void);
 /**
  * ONNX Runtimeをロードして初期化する。
  *
+ * 対象のONNX Runtimeのマイナーバージョンは ::voicevox_get_onnxruntime_lib_min_required_minor_version 以上でなければならない。 ::voicevox_get_onnxruntime_lib_max_supported_minor_version よりも大きい場合は警告を出す。
+ *
  * 一度成功したら、以後は引数を無視して同じ参照を返す。
  *
  * @param [in] options オプション
@@ -574,6 +728,8 @@ VoicevoxResultCode voicevox_onnxruntime_load_once(struct VoicevoxLoadOnnxruntime
 #if defined(VOICEVOX_LINK_ONNXRUNTIME)
 /**
  * ONNX Runtimeを初期化する。
+ *
+ * リンクされているONNX Runtimeのマイナーバージョンが ::voicevox_get_onnxruntime_lib_min_required_minor_version よりも小さい場合失敗する。 ::voicevox_get_onnxruntime_lib_max_supported_minor_version よりも大きい場合は警告を出す。
  *
  * 一度成功したら以後は同じ参照を返す。
  *
@@ -646,7 +802,7 @@ VoicevoxResultCode voicevox_open_jtalk_rc_use_user_dict(const struct OpenJtalkRc
 /**
  * 日本語のテキストを解析する。
  *
- * 生成したJSON文字列を解放するには ::voicevox_json_free を使う。
+ * 生成したJSON文字列を解放するには ::voicevox_string_free を使う。
  *
  * @param [in] open_jtalk Open JTalkのオブジェクト
  * @param [in] text UTF-8の日本語テキスト
@@ -706,9 +862,21 @@ __declspec(dllimport)
 const char *voicevox_get_version(void);
 
 /**
+ * ::VOICEVOX_FRAME_RATE を返す。
+ *
+ * @return ::VOICEVOX_FRAME_RATE
+ *
+ * \orig-impl{voicevox_get_frame_rate}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+double voicevox_get_frame_rate(void);
+
+/**
  * AccentPhraseの配列からAudioQueryを作る。
  *
- * 生成したJSON文字列を解放するには ::voicevox_json_free を使う。
+ * 生成したJSON文字列を解放するには ::voicevox_string_free を使う。
  *
  * @param [in] accent_phrases_json AccentPhraseの配列のJSON文字列
  * @param [out] output_accent_phrases_json 生成先
@@ -727,25 +895,189 @@ VoicevoxResultCode voicevox_audio_query_create_from_accent_phrases(const char *a
                                                                    char **output_audio_query_json);
 
 /**
+ * デフォルトの `voicevox_audio_query_frame_length` のオプションを生成する。
+ *
+ * @return デフォルト値が設定された `voicevox_audio_query_frame_length` のオプション
+ *
+ * \no-orig-impl{voicevox_make_default_audio_query_frame_length_options}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+struct VoicevoxAudioQueryFrameLengthOptions voicevox_make_default_audio_query_frame_length_options(void);
+
+/**
+ * 音声の総フレーム数を算出する。
+ *
+ * 音声の秒数は、フレーム数を ::VOICEVOX_FRAME_RATE で割った値で表せる。
+ *
+ * 算出した値は[`SIZE_MAX`]で飽和する。算出方法は以下の通り。
+ *
+ * 1. 以下の秒数を32-bit浮動小数点数として解釈して集める。
+ *     - [`AudioQuery::pre_phoneme_length`]
+ *     - [`AudioQuery::accent_phrases`]の要素ごとに
+ *         - [`AccentPhrase::moras`]の要素ごとに
+ *             - [`Mora::consonant_length`]
+ *             - [`Mora::vowel_length`]
+ *         - ::VoicevoxAudioQueryFrameLengthOptions::enable_interrogative_upspeak
+ *           かつ[`AccentPhrase::is_interrogative`]かつ`moras`の最後の[`Mora::pitch`]が`0.0`以外のとき、`0.15`秒
+ *         - [`AccentPhrase::pause_mora`]の`Mora::consonant_length`（通常はない）
+ *         - `AccentPhrase::pause_mora`の`Mora::vowel_length`
+ *     - [`AudioQuery::post_phoneme_length`]
+ * 2. それぞれの秒数を`secs`として、対応するフレーム長を`round_ties_even(round_ties_even(secs * (float)VOICEVOX_FRAME_RATE) / speed_scale)`として算出する。ここで`round_ties_even`は[Rustの`f32::round_ties_even`]であり、libmの[`roundevenf(3)`]と同様IEEE 754の`roundToIntegralTiesToEven`演算を行う。[`AudioQuery::speed_scale`]も32-bit浮動小数点数として解釈し、乗算と除算も32-bit浮動小数点数上で行う。
+ * 3. 各フレーム長を足し合わせる。
+ *
+ * `AudioQuery`に対応する音声の長さは将来的に変わる可能性がある。例えば、秒数を64-bit浮動小数点数として解釈しているVOICEVOX
+ * ENGINEと挙動を揃える可能性がある。
+ *
+ * [`SIZE_MAX`]: https://en.cppreference.com/c/types/limits
+ * [`AudioQuery::pre_phoneme_length`]: ../rust_api/voicevox_core/struct.AudioQuery.html#structfield.pre_phoneme_length
+ * [`AudioQuery::accent_phrases`]: ../rust_api/voicevox_core/struct.AudioQuery.html#structfield.accent_phrases
+ * [`AccentPhrase::moras`]: ../rust_api/voicevox_core/struct.AccentPhrase.html#structfield.moras
+ * [`Mora::consonant_length`]: ../rust_api/voicevox_core/struct.Mora.html#structfield.consonant_length
+ * [`Mora::vowel_length`]: ../rust_api/voicevox_core/struct.Mora.html#structfield.vowel_length
+ * [`AccentPhrase::is_interrogative`]: ../rust_api/voicevox_core/struct.AccentPhrase.html#structfield.is_interrogative
+ * [`Mora::pitch`]: ../rust_api/voicevox_core/struct.Mora.html#structfield.pitch
+ * [`AccentPhrase::pause_mora`]: ../rust_api/voicevox_core/struct.AccentPhrase.html#structfield.pause_mora
+ * [`AudioQuery::post_phoneme_length`]: ../rust_api/voicevox_core/struct.AudioQuery.html#structfield.post_phoneme_length
+ * [Rustの`f32::round_ties_even`]: https://doc.rust-lang.org/stable/std/primitive.f32.html#method.round_ties_even
+ * [`roundevenf(3)`]: https://en.cppreference.com/w/c/numeric/math/roundeven
+ * [`AudioQuery::speed_scale`]: ../rust_api/voicevox_core/struct.AudioQuery.html#structfield.speed_scale
+ *
+ * @param [in] audio_query_json `AudioQuery`型のJSON
+ * @param [in] options オプション
+ * @param [out] output_frame_length 算出した総フレーム数の出力先
+ *
+ * @returns 成功時には ::VOICEVOX_RESULT_OK 、失敗時には ::VOICEVOX_RESULT_INVALID_UTF8_INPUT_ERROR または ::VOICEVOX_RESULT_INVALID_AUDIO_QUERY_ERROR
+ *
+ * \examples{
+ * ```c
+ * char *query = NULL;
+ * VoicevoxAudioFeature *audio = NULL;
+ *
+ * VoicevoxResultCode voicevox_result = VOICEVOX_RESULT_OK;
+ *
+ * #define TRY(result)                                                            \
+ *   do {                                                                         \
+ *     voicevox_result = result;                                                  \
+ *     if (voicevox_result != VOICEVOX_RESULT_OK) {                               \
+ *       goto cleanup;                                                            \
+ *     }                                                                          \
+ *   } while (0)
+ * ```
+ *
+ * ```c
+ * TRY(voicevox_synthesizer_create_audio_query(
+ *     synth, "こんにちは、音声合成の世界へようこそ？", WHATEVER_STYLE1,
+ *     &query));
+ *
+ * TRY(voicevox_synthesizer_create_audio_feature(
+ *     synth, query, WHATEVER_STYLE2, voicevox_make_default_synthesis_options(),
+ *     &audio));
+ *
+ * size_t frame_length_of_audio_query;
+ * TRY(voicevox_audio_query_frame_length(
+ *     query, voicevox_make_default_audio_query_frame_length_options(),
+ *     &frame_length_of_audio_query));
+ *
+ * const size_t frame_length_of_audio_feature = voicevox_audio_feature_len(audio);
+ *
+ * assert(frame_length_of_audio_query == frame_length_of_audio_feature);
+ * ```
+ *
+ * ```c
+ * size_t to_frame_length(float secs, float speed_scale) {
+ *   const float kFrameRate = (float)VOICEVOX_FRAME_RATE;
+ *   return roundevenf(roundevenf(secs * kFrameRate) / speed_scale);
+ * }
+ *
+ * int main(void) {
+ *   // …
+ *
+ *   // speed_scale         = 1.2f
+ *   // pre_phoneme_length  = 3.3f
+ *   // post_phoneme_length = 4.4f
+ *   const char *kQuery = "{\n"
+ *                        "  \"accent_phrases\": [],\n"
+ *                        "  \"speedScale\": 1.2,\n"
+ *                        "  \"pitchScale\": 0.0,\n"
+ *                        "  \"intonationScale\": 1.0,\n"
+ *                        "  \"volumeScale\": 1.0,\n"
+ *                        "  \"prePhonemeLength\": 3.3,\n"
+ *                        "  \"postPhonemeLength\": 4.4,\n"
+ *                        "  \"outputSamplingRate\": 24000,\n"
+ *                        "  \"outputStereo\": false\n"
+ *                        "}\n";
+ *
+ *   size_t frame_length;
+ *   TRY(voicevox_audio_query_frame_length(
+ *       kQuery, voicevox_make_default_audio_query_frame_length_options(),
+ *       &frame_length));
+ *
+ *   assert(frame_length ==
+ *          // `speed_scale`, `pre_phoneme_length`
+ *          to_frame_length(3.3f, 1.2f)
+ *              // `speed_scale`, `consonant_length`, `vowel_length`,
+ *              // `is_interrogative`
+ *              + 0
+ *              // `speed_scale`, `post_phoneme_length`
+ *              + to_frame_length(4.4f, 1.2f));
+ *
+ *   // …
+ * }
+ * ```
+ *
+ * ```c
+ * // speed_scale = FLT_MIN
+ * const char *kQuery = "{\n"
+ *                      "  \"accent_phrases\": [],\n"
+ *                      "  \"speedScale\": 1.1754943508222875e-38,\n"
+ *                      "  \"pitchScale\": 0.0,\n"
+ *                      "  \"intonationScale\": 1.0,\n"
+ *                      "  \"volumeScale\": 1.0,\n"
+ *                      "  \"prePhonemeLength\": 0.1,\n"
+ *                      "  \"postPhonemeLength\": 0.1,\n"
+ *                      "  \"outputSamplingRate\": 24000,\n"
+ *                      "  \"outputStereo\": false\n"
+ *                      "}\n";
+ *
+ * size_t frame_length;
+ * TRY(voicevox_audio_query_frame_length(
+ *     kQuery, voicevox_make_default_audio_query_frame_length_options(),
+ *     &frame_length));
+ *
+ * assert(frame_length == SIZE_MAX);
+ * ```
+ * }
+ *
+ * \safety{
+ * - `audio_query_json`はヌル終端文字列を指し、かつ<a href="#voicevox-core-safety">読み込みについて有効</a>でなければならない。
+ * - `output_frame_length`は<a href="#voicevox-core-safety">書き込みについて有効</a>でなければならない。
+ * }
+ *
+ * \orig-impl{voicevox_audio_query_frame_length}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+VoicevoxResultCode voicevox_audio_query_frame_length(const char *audio_query_json,
+                                                     struct VoicevoxAudioQueryFrameLengthOptions options,
+                                                     uintptr_t *output_frame_length);
+
+/**
  * 与えられたJSONが`AudioQuery`型として不正であるときエラーを返す。
  *
  * 不正であるとは、以下のいずれかの条件を満たすことである。
  *
  * - [Rust APIの`AudioQuery`型]としてデシリアライズ不可、もしくはJSONとして不正。
  * - `accent_phrases`の要素のうちいずれかが、 ::voicevox_accent_phrase_validate でエラーになる。
- * - `outputSamplingRate`が`24000`の倍数ではない、もしくは`0` (将来的に解消予定。cf. [#762])。
  *
  * [Rust APIの`AudioQuery`型]: ../rust_api/voicevox_core/struct.AudioQuery.html
  * [#762]: https://github.com/VOICEVOX/voicevox_core/issues/762
  *
  * 次の状態に対しては警告のログを出す。将来的にはエラーになる予定。
  *
- * - `accent_phrases`の要素のうちいずれかが警告が出る状態。
- * - `speedScale`が負。
- * - `volumeScale`が負。
- * - `prePhonemeLength`が負。
- * - `postPhonemeLength`が負。
- * - `outputSamplingRate`が`24000`以外の値（エラーと同様将来的に解消予定）。
+ * - `outputSamplingRate`が`24000`以外の値（将来的に解消予定。cf. [#762]）。
  *
  * @param [in] audio_query_json `AudioQuery`型のJSON
  *
@@ -769,14 +1101,9 @@ VoicevoxResultCode voicevox_audio_query_validate(const char *audio_query_json);
  *
  * - [Rust APIの`AccentPhrase`型]としてデシリアライズ不可、もしくはJSONとして不正。
  * - `moras`もしくは`pause_mora`の要素のうちいずれかが、 ::voicevox_mora_validate でエラーになる。
- * - `accent`が`0`。
+ * - `accent`が`moras`の数を超過している。
  *
  * [Rust APIの`AccentPhrase`型]: ../rust_api/voicevox_core/struct.AccentPhrase.html
- *
- * 次の状態に対しては警告のログを出す。将来的にはエラーになる予定。
- *
- * - `moras`もしくは`pause_mora`の要素のうちいずれかが、警告が出る状態。
- * - `accent`が`moras`の数を超過している。
  *
  * @param [in] accent_phrase_json `AccentPhrase`型のJSON
  *
@@ -800,15 +1127,8 @@ VoicevoxResultCode voicevox_accent_phrase_validate(const char *accent_phrase_jso
  *
  * - [Rust APIの`Mora`型]としてデシリアライズ不可、もしくはJSONとして不正。
  * - `consonant`と`consonant_length`の有無が不一致。
- * - `consonant`が子音以外の音素であるか、もしくは音素として不正。
- * - `vowel`が子音であるか、もしくは音素として不正。
  *
  * [Rust APIの`Mora`型]: ../rust_api/voicevox_core/struct.Mora.html
- *
- * 次の状態に対しては警告のログを出す。将来的にはエラーになる予定。
- *
- * - `consonant_length`が負。
- * - `vowel_length`が負。
  *
  * @param [in] mora_json `Mora`型のJSON
  *
@@ -955,6 +1275,36 @@ VoicevoxResultCode voicevox_ensure_compatible(const char *score_json,
                                               const char *frame_audio_query_json);
 
 /**
+ * signed 16-bit little endianのPCMデータからWAV形式のバイナリを生成する。
+ *
+ * `pcm`がヌルならクラッシュする。
+ *
+ * @param [in] pcm_length PCMデータのバイト長
+ * @param [in] pcm PCMデータ。非ヌル
+ * @param [in] sampling_rate サンプリングレート
+ * @param [in] is_stereo ステレオかどうか
+ * @param [out] output_wav_length 出力のバイト長
+ * @param [out] output_wav 出力先
+ *
+ * \safety{
+ * - `pcm_length > 0`のとき、`pcm`は長さ`pcm_length`にわたって<a href="#voicevox-core-safety">読み込みについて有効</a>でなければならない。
+ * - `output_wav_length`は<a href="#voicevox-core-safety">書き込みについて有効</a>でなければならない。
+ * - `output_wav`は<a href="#voicevox-core-safety">書き込みについて有効</a>でなければならない。
+ * }
+ *
+ * \orig-impl{voicevox_wav_from_s16le}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+void voicevox_wav_from_s16le(uintptr_t pcm_length,
+                             const uint8_t *pcm,
+                             uint32_t sampling_rate,
+                             bool is_stereo,
+                             uintptr_t *output_wav_length,
+                             uint8_t **output_wav);
+
+/**
  * VVMファイルを開く。
  *
  * @param [in] path vvmファイルへのUTF-8のファイルパス
@@ -996,7 +1346,7 @@ void voicevox_voice_model_file_id(const struct VoicevoxVoiceModelFile *model,
 /**
  * ::VoicevoxVoiceModelFile からメタ情報を取得する。
  *
- * JSONの解放は ::voicevox_json_free で行う。
+ * JSONの解放は ::voicevox_string_free で行う。
  *
  * @param [in] model 音声モデル
  *
@@ -1067,10 +1417,22 @@ __declspec(dllimport)
 void voicevox_synthesizer_delete(struct VoicevoxSynthesizer *synthesizer);
 
 /**
+ * デフォルトの `voicevox_synthesizer_load_voice_model` のオプションを生成する
+ * @return デフォルト値が設定された `voicevox_synthesizer_load_voice_model` のオプション
+ *
+ * \no-orig-impl{voicevox_make_default_load_voice_model_options}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+struct VoicevoxLoadVoiceModelOptions voicevox_make_default_load_voice_model_options(void);
+
+/**
  * 音声モデルを読み込む。
  *
  * @param [in] synthesizer 音声シンセサイザ
  * @param [in] model 音声モデル
+ * @param [in] options オプション
  *
  * @returns 結果コード
  *
@@ -1080,7 +1442,8 @@ void voicevox_synthesizer_delete(struct VoicevoxSynthesizer *synthesizer);
 __declspec(dllimport)
 #endif
 VoicevoxResultCode voicevox_synthesizer_load_voice_model(const struct VoicevoxSynthesizer *synthesizer,
-                                                         const struct VoicevoxVoiceModelFile *model);
+                                                         const struct VoicevoxVoiceModelFile *model,
+                                                         struct VoicevoxLoadVoiceModelOptions options);
 
 /**
  * 音声モデルの読み込みを解除する。
@@ -1153,7 +1516,7 @@ bool voicevox_synthesizer_is_loaded_voice_model(const struct VoicevoxSynthesizer
 /**
  * 今読み込んでいる音声モデルのメタ情報を、JSONで取得する。
  *
- * JSONの解放は ::voicevox_json_free で行う。
+ * JSONの解放は ::voicevox_string_free で行う。
  *
  * @param [in] synthesizer 音声シンセサイザ
  *
@@ -1169,7 +1532,7 @@ char *voicevox_synthesizer_create_metas_json(const struct VoicevoxSynthesizer *s
 /**
  * ONNX Runtimeとして利用可能なデバイスの情報を、JSONで取得する。
  *
- * JSONの解放は ::voicevox_json_free で行う。
+ * JSONの解放は ::voicevox_string_free で行う。
  *
  * あくまでONNX Runtimeが対応しているデバイスの情報であることに注意。GPUが使える環境ではなかったとしても`cuda`や`dml`は`true`を示しうる。
  *
@@ -1201,7 +1564,7 @@ VoicevoxResultCode voicevox_onnxruntime_create_supported_devices_json(const stru
 /**
  * AquesTalk風記法から、AudioQueryをJSONとして生成する。
  *
- * 生成したJSON文字列を解放するには ::voicevox_json_free を使う。
+ * 生成したJSON文字列を解放するには ::voicevox_string_free を使う。
  *
  * @param [in] synthesizer 音声シンセサイザ
  * @param [in] kana AquesTalk風記法
@@ -1237,7 +1600,7 @@ VoicevoxResultCode voicevox_synthesizer_create_audio_query_from_kana(const struc
 /**
  * 日本語テキストから、AudioQueryをJSONとして生成する。
  *
- * 生成したJSON文字列を解放するには ::voicevox_json_free を使う。
+ * 生成したJSON文字列を解放するには ::voicevox_string_free を使う。
  *
  * ::voicevox_synthesizer_create_accent_phrases と ::voicevox_audio_query_create_from_accent_phrases
  * が一体になったショートハンド。詳細は[テキスト音声合成の流れ]を参照。
@@ -1278,7 +1641,7 @@ VoicevoxResultCode voicevox_synthesizer_create_audio_query(const struct Voicevox
 /**
  * AquesTalk風記法から、AccentPhrase (アクセント句)の配列をJSON形式で生成する。
  *
- * 生成したJSON文字列を解放するには ::voicevox_json_free を使う。
+ * 生成したJSON文字列を解放するには ::voicevox_string_free を使う。
  *
  * @param [in] synthesizer 音声シンセサイザ
  * @param [in] kana AquesTalk風記法
@@ -1315,7 +1678,7 @@ VoicevoxResultCode voicevox_synthesizer_create_accent_phrases_from_kana(const st
 /**
  * 日本語テキストから、AccentPhrase (アクセント句)の配列をJSON形式で生成する。
  *
- * 生成したJSON文字列を解放するには ::voicevox_json_free を使う。
+ * 生成したJSON文字列を解放するには ::voicevox_string_free を使う。
  *
  * ::voicevox_open_jtalk_rc_analyze と ::voicevox_synthesizer_replace_mora_data
  * が一体になったショートハンド。詳細は[テキスト音声合成の流れ]を参照。
@@ -1356,7 +1719,7 @@ VoicevoxResultCode voicevox_synthesizer_create_accent_phrases(const struct Voice
 /**
  * AccentPhraseの配列の音高・音素長を、特定の声で生成しなおす。
  *
- * 生成したJSON文字列を解放するには ::voicevox_json_free を使う。
+ * 生成したJSON文字列を解放するには ::voicevox_string_free を使う。
  *
  * ::voicevox_synthesizer_replace_phoneme_length と ::voicevox_synthesizer_replace_mora_pitch
  * が一体になったショートハンド。詳細は[テキスト音声合成の流れ]を参照。
@@ -1388,7 +1751,7 @@ VoicevoxResultCode voicevox_synthesizer_replace_mora_data(const struct VoicevoxS
 /**
  * AccentPhraseの配列の音素長を、特定の声で生成しなおす。
  *
- * 生成したJSON文字列を解放するには ::voicevox_json_free を使う。
+ * 生成したJSON文字列を解放するには ::voicevox_string_free を使う。
  *
  * @param [in] synthesizer 音声シンセサイザ
  * @param [in] accent_phrases_json AccentPhraseの配列のJSON文字列
@@ -1415,7 +1778,7 @@ VoicevoxResultCode voicevox_synthesizer_replace_phoneme_length(const struct Voic
 /**
  * AccentPhraseの配列の音高を、特定の声で生成しなおす。
  *
- * 生成したJSON文字列を解放するには ::voicevox_json_free を使う。
+ * 生成したJSON文字列を解放するには ::voicevox_string_free を使う。
  *
  * @param [in] synthesizer 音声シンセサイザ
  * @param [in] accent_phrases_json AccentPhraseの配列のJSON文字列
@@ -1453,7 +1816,7 @@ struct VoicevoxSynthesisOptions voicevox_make_default_synthesis_options(void);
 /**
  * AudioQueryから音声合成を行う。
  *
- * 生成したWAVデータを解放するには ::voicevox_wav_free を使う。
+ * 生成したWAVデータを解放するには ::voicevox_bytes_free を使う。
  *
  * @param [in] synthesizer 音声シンセサイザ
  * @param [in] audio_query_json AudioQueryのJSON文字列
@@ -1483,6 +1846,247 @@ VoicevoxResultCode voicevox_synthesizer_synthesis(const struct VoicevoxSynthesiz
                                                   uint8_t **output_wav);
 
 /**
+ * AudioQueryから音声合成用の中間表現を<b>構築</b>(_construct_)する。
+ *
+ * 生成した中間表現を解放するには ::voicevox_audio_feature_delete を使う。
+ *
+ * > [!WARNING]
+ * > ストリーミング音声合成にはいくつか注意事項がある。ユーザーガイドの[ストリーミング音声合成]を参照。
+ *
+ * [ストリーミング音声合成]: https://github.com/VOICEVOX/voicevox_core/blob/main/docs/guide/user/usage.md#ストリーミング音声合成
+ *
+ * @param [in] synthesizer 音声シンセサイザ
+ * @param [in] audio_query_json AudioQueryのJSON文字列
+ * @param [in] style_id スタイルID
+ * @param [in] options オプション
+ * @param [out] out_audio_feature 構築先
+ *
+ * @returns 結果コード
+ *
+ * \safety{
+ * - `audio_query_json`はヌル終端文字列を指し、かつ<a href="#voicevox-core-safety">読み込みについて有効</a>でなければならない。
+ * - `out_audio_feature`は<a href="#voicevox-core-safety">書き込みについて有効</a>でなければならない。
+ * }
+ *
+ * \orig-impl{voicevox_synthesizer_create_audio_feature}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+VoicevoxResultCode voicevox_synthesizer_create_audio_feature(const struct VoicevoxSynthesizer *synthesizer,
+                                                             const char *audio_query_json,
+                                                             VoicevoxStyleId style_id,
+                                                             struct VoicevoxSynthesisOptions options,
+                                                             struct VoicevoxAudioFeature **out_audio_feature);
+
+/**
+ * ::VoicevoxAudioFeature の総フレーム数を取得する。
+ *
+ * この ::VoicevoxAudioFeature
+ * を生成するときに用いた`AudioQuery`について、生成時と同じ疑問文の語尾上昇設定で
+ * ::voicevox_audio_query_frame_length により算出した値に等しい。
+ *
+ * @param [in] audio_feature 音声合成用の中間表現
+ *
+ * @returns 総フレーム数
+ *
+ * \orig-impl{voicevox_audio_feature_len}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+uintptr_t voicevox_audio_feature_len(const struct VoicevoxAudioFeature *audio_feature);
+
+/**
+ * ::voicevox_audio_feature_len で取得する長さが`0`かどうか。
+ *
+ * @param [in] audio_feature 音声合成用の中間表現
+ *
+ * @returns 長さが`0`なら`true`、それ以外は`false`
+ *
+ * \orig-impl{voicevox_audio_feature_is_empty}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+bool voicevox_audio_feature_is_empty(const struct VoicevoxAudioFeature *audio_feature);
+
+/**
+ * 指定された範囲に対応した ::VoicevoxAudioFeatureSlice を返す。
+ *
+ * `audio_feature`は複製されずにそのまま構造体に入る。解放は不要。
+ *
+ * @param [in] audio_feature
+ * @param [in] start_inclusive 開始フレーム番号
+ * @param [in] end 終了フレーム番号
+ * @param [in] end_is_inclusive `end`を含むかどうか
+ * @param [in] clamp
+ * @param [in] allow_start_exceeds_end
+ * @param [out] output スライスの出力先
+ *
+ * @returns 結果コード。エラーは
+ *          \ref VOICEVOX_RESULT_START_OUT_OF_BOUNDS_ERROR
+ *          、\ref VOICEVOX_RESULT_END_OUT_OF_BOUNDS_ERROR
+ *          、または \ref VOICEVOX_RESULT_START_EXCEEDS_END_ERROR
+ *
+ * \safety{
+ * - `output`は<a href="#voicevox-core-safety">書き込みについて有効</a>でなければならない。
+ * }
+ *
+ * \orig-impl{voicevox_audio_feature_slice}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+VoicevoxResultCode voicevox_audio_feature_slice(const struct VoicevoxAudioFeature *audio_feature,
+                                                uintptr_t start_inclusive,
+                                                uintptr_t end,
+                                                bool end_is_inclusive,
+                                                bool clamp,
+                                                bool allow_start_exceeds_end,
+                                                struct VoicevoxAudioFeatureSlice *output);
+
+/**
+ * 与えられた ::VoicevoxAudioFeature の全体を表す ::VoicevoxAudioFeatureSlice を返す。
+ *
+ * `audio_feature`は複製されずにそのまま構造体に入る。解放は不要。
+ *
+ * \orig-impl{voicevox_audio_feature_slice_new}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+struct VoicevoxAudioFeatureSlice voicevox_audio_feature_slice_new(const struct VoicevoxAudioFeature *audio_feature,
+                                                                  bool clamp,
+                                                                  bool allow_start_exceeds_end);
+
+/**
+ * ::VoicevoxAudioFeatureSlice が持つフレーム数を返す。
+ *
+ * @param [in] audio_feature_slice
+ * @param [out] output フレーム数の出力先
+ *
+ * @returns 結果コード。エラーは
+ *          \ref VOICEVOX_RESULT_START_OUT_OF_BOUNDS_ERROR
+ *          、\ref VOICEVOX_RESULT_END_OUT_OF_BOUNDS_ERROR
+ *          、または \ref VOICEVOX_RESULT_START_EXCEEDS_END_ERROR
+ *
+ * \safety{
+ * - `output`は<a href="#voicevox-core-safety">書き込みについて有効</a>でなければならない。
+ * }
+ *
+ * \orig-impl{voicevox_audio_feature_slice_len}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+VoicevoxResultCode voicevox_audio_feature_slice_len(struct VoicevoxAudioFeatureSlice audio_feature_slice,
+                                                    uintptr_t *output);
+
+/**
+ * ::voicevox_audio_feature_slice_len で取得する長さが`0`かどうかを返す。
+ *
+ * @param [in] audio_feature_slice
+ * @param [out] output 長さが`0`かどうかの出力先
+ *
+ * @returns 結果コード。エラーは
+ *          \ref VOICEVOX_RESULT_START_OUT_OF_BOUNDS_ERROR
+ *          、\ref VOICEVOX_RESULT_END_OUT_OF_BOUNDS_ERROR
+ *          、または \ref VOICEVOX_RESULT_START_EXCEEDS_END_ERROR
+ *
+ * \safety{
+ * - `output`は<a href="#voicevox-core-safety">書き込みについて有効</a>でなければならない。
+ * }
+ *
+ * \orig-impl{voicevox_audio_feature_slice_is_empty}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+VoicevoxResultCode voicevox_audio_feature_slice_is_empty(struct VoicevoxAudioFeatureSlice audio_feature_slice,
+                                                         bool *output);
+
+/**
+ * 与えられた ::VoicevoxAudioFeatureSlice のサブスライスを返す。
+ *
+ * `audio_feature_slice.audio_feature`は複製されずにそのまま構造体に入る。解放は不要。
+ *
+ * @param [in] audio_feature_slice
+ * @param [in] start_inclusive 開始フレーム番号
+ * @param [in] end 終了フレーム番号
+ * @param [in] end_is_inclusive `end`を含むかどうか
+ * @param [in] clamp
+ * @param [in] allow_start_exceeds_end
+ * @param [out] output サブスライスの出力先
+ *
+ * @returns 結果コード。エラーは
+ *          \ref VOICEVOX_RESULT_START_OUT_OF_BOUNDS_ERROR
+ *          、\ref VOICEVOX_RESULT_END_OUT_OF_BOUNDS_ERROR
+ *          、または \ref VOICEVOX_RESULT_START_EXCEEDS_END_ERROR
+ *
+ * \safety{
+ * - `output`は<a href="#voicevox-core-safety">書き込みについて有効</a>でなければならない。
+ * }
+ *
+ * \orig-impl{voicevox_audio_feature_slice_slice}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+VoicevoxResultCode voicevox_audio_feature_slice_slice(struct VoicevoxAudioFeatureSlice audio_feature_slice,
+                                                      uintptr_t start_inclusive,
+                                                      uintptr_t end,
+                                                      bool end_is_inclusive,
+                                                      bool clamp,
+                                                      bool allow_start_exceeds_end,
+                                                      struct VoicevoxAudioFeatureSlice *output);
+
+/**
+ * ::VoicevoxAudioFeatureSlice から、16bit PCMで音声波形を生成する。
+ *
+ * 生成されたPCMデータが`0`バイトのとき、`output_pcm_length`には`0`が、`output_pcm`には ::voicevox_empty_bytes が書き込まれる。
+ *
+ * 生成した`1`バイト以上のPCMデータを解放するには ::voicevox_bytes_free を使う。
+ *
+ * @param [in] synthesizer 音声シンセサイザ
+ * @param [in] audio_feature_slice 音声合成用の中間表現
+ * @param [out] output_pcm_length 出力のバイト長
+ * @param [out] output_pcm 出力先
+ *
+ * @returns 結果コード
+ *
+ * \safety{
+ * - `output_pcm_length`は<a href="#voicevox-core-safety">書き込みについて有効</a>でなければならない。
+ * - `output_pcm`は<a href="#voicevox-core-safety">書き込みについて有効</a>でなければならない。
+ * }
+ *
+ * \orig-impl{voicevox_synthesizer_render}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+VoicevoxResultCode voicevox_synthesizer_render(const struct VoicevoxSynthesizer *synthesizer,
+                                               struct VoicevoxAudioFeatureSlice audio_feature_slice,
+                                               uintptr_t *output_pcm_length,
+                                               uint8_t **output_pcm);
+
+/**
+ * ::VoicevoxAudioFeature を<b>破棄</b>(_destruct_)する。
+ *
+ * 破棄対象への他スレッドでのアクセスが存在する場合、それらがすべて終わるのを待ってから破棄する。
+ *
+ * この関数の呼び出し後に破棄し終えた対象にアクセスすると、プロセスを異常終了する。
+ *
+ * @param [in] audio_feature 破棄対象。nullable
+ *
+ * \no-orig-impl{voicevox_audio_feature_delete}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+void voicevox_audio_feature_delete(struct VoicevoxAudioFeature *audio_feature);
+
+/**
  * デフォルトのテキスト音声合成オプションを生成する
  * @return テキスト音声合成オプション
  *
@@ -1496,7 +2100,7 @@ struct VoicevoxTtsOptions voicevox_make_default_tts_options(void);
 /**
  * AquesTalk風記法から音声合成を行う。
  *
- * 生成したWAVデータを解放するには ::voicevox_wav_free を使う。
+ * 生成したWAVデータを解放するには ::voicevox_bytes_free を使う。
  *
  * @param [in] synthesizer
  * @param [in] kana AquesTalk風記法
@@ -1528,7 +2132,7 @@ VoicevoxResultCode voicevox_synthesizer_tts_from_kana(const struct VoicevoxSynth
 /**
  * 日本語テキストから音声合成を行う。
  *
- * 生成したWAVデータを解放するには ::voicevox_wav_free を使う。
+ * 生成したWAVデータを解放するには ::voicevox_bytes_free を使う。
  *
  * ::voicevox_synthesizer_create_audio_query と ::voicevox_synthesizer_synthesis
  * が一体になったショートハンド。詳細は[テキスト音声合成の流れ]を参照。
@@ -1569,7 +2173,7 @@ VoicevoxResultCode voicevox_synthesizer_tts(const struct VoicevoxSynthesizer *sy
  *
  * [歌唱音声合成]: https://github.com/VOICEVOX/voicevox_core/blob/main/docs/guide/user/song.md
  *
- * 生成したJSONを解放するには ::voicevox_json_free を使う。
+ * 生成したJSONを解放するには ::voicevox_string_free を使う。
  *
  * @param [in] synthesizer 音声シンセサイザ
  * @param [in] score_json [`Score`型]を表すJSON
@@ -1623,7 +2227,7 @@ VoicevoxResultCode voicevox_synthesizer_create_sing_frame_audio_query(const stru
  *
  * [歌唱音声合成]: https://github.com/VOICEVOX/voicevox_core/blob/main/docs/guide/user/song.md
  *
- * 生成したJSONを解放するには ::voicevox_json_free を使う。
+ * 生成したJSONを解放するには ::voicevox_string_free を使う。
  *
  * @param [in] synthesizer 音声シンセサイザ
  * @param [in] score_json [`Score`型]を表すJSON
@@ -1659,7 +2263,7 @@ VoicevoxResultCode voicevox_synthesizer_create_sing_frame_f0(const struct Voicev
  *
  * [歌唱音声合成]: https://github.com/VOICEVOX/voicevox_core/blob/main/docs/guide/user/song.md
  *
- * 生成したJSONを解放するには ::voicevox_json_free を使う。
+ * 生成したJSONを解放するには ::voicevox_string_free を使う。
  *
  * @param [in] synthesizer 音声シンセサイザ
  * @param [in] score_json [`Score`型]を表すJSON
@@ -1695,7 +2299,7 @@ VoicevoxResultCode voicevox_synthesizer_create_sing_frame_volume(const struct Vo
  *
  * [歌唱音声合成]: https://github.com/VOICEVOX/voicevox_core/blob/main/docs/guide/user/song.md
  *
- * 生成したWAVデータを解放するには ::voicevox_wav_free を使う。
+ * 生成したWAVデータを解放するには ::voicevox_bytes_free を使う。
  *
  * @param [in] synthesizer 音声シンセサイザ
  * @param [in] frame_audio_query_json [`FrameAudioQuery`型]を表すJSON
@@ -1736,7 +2340,42 @@ VoicevoxResultCode voicevox_synthesizer_frame_synthesis(const struct VoicevoxSyn
                                                         uint8_t **output_wav);
 
 /**
- * JSON文字列を解放する。
+ * 文字列を解放する。
+ *
+ * @param [in] string 解放する文字列。nullable
+ *
+ * \safety{
+ * - `string`がヌルポインタでないならば、以下のAPIで得られたポインタでなくてはいけない。
+ *     - ::voicevox_audio_query_create_from_accent_phrases
+ *     - ::voicevox_onnxruntime_create_supported_devices_json
+ *     - ::voicevox_voice_model_file_create_metas_json
+ *     - ::voicevox_open_jtalk_rc_analyze
+ *     - ::voicevox_synthesizer_create_metas_json
+ *     - ::voicevox_synthesizer_create_audio_query
+ *     - ::voicevox_synthesizer_create_audio_query_from_kana
+ *     - ::voicevox_synthesizer_create_accent_phrases
+ *     - ::voicevox_synthesizer_create_accent_phrases_from_kana
+ *     - ::voicevox_synthesizer_replace_mora_data
+ *     - ::voicevox_synthesizer_replace_phoneme_length
+ *     - ::voicevox_synthesizer_replace_mora_pitch
+ *     - ::voicevox_synthesizer_create_sing_frame_audio_query
+ *     - ::voicevox_synthesizer_create_sing_frame_f0
+ *     - ::voicevox_synthesizer_create_sing_frame_volume
+ *     - ::voicevox_user_dict_to_json
+ * - 文字列の長さは生成時より変更されていてはならない。
+ * - `string`がヌルポインタでないならば、<a href="#voicevox-core-safety">読み込みと書き込みについて有効</a>でなければならない。
+ * - `string`がヌルポインタでないならば、以後<b>ダングリングポインタ</b>(_dangling pointer_)として扱われなくてはならない。
+ * }
+ *
+ * \no-orig-impl{voicevox_string_free}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+void voicevox_string_free(char *string);
+
+/**
+ * ::voicevox_string_free の別名。非推奨。
  *
  * @param [in] json 解放するJSON文字列。nullable
  *
@@ -1768,21 +2407,50 @@ VoicevoxResultCode voicevox_synthesizer_frame_synthesis(const struct VoicevoxSyn
 #ifdef _WIN32
 __declspec(dllimport)
 #endif
+VOICEVOX_DEPRECATED("use 'voicevox_string_free' instead")
 void voicevox_json_free(char *json);
 
 /**
- * WAVデータを解放する。
+ * バイト列を解放する。
+ *
+ * ::voicevox_empty_bytes に対しては警告のログを出す。
+ *
+ * @param [in] bytes 解放するバイト列。nullable
+ *
+ * \safety{
+ * - `bytes`がヌルポインタでないならば、以下のAPIで得られたポインタでなくてはいけない。
+ *     - ::voicevox_synthesizer_render
+ *     - ::voicevox_synthesizer_synthesis
+ *     - ::voicevox_synthesizer_tts
+ *     - ::voicevox_synthesizer_tts_from_kana
+ *     - ::voicevox_synthesizer_frame_synthesis
+ *     - ::voicevox_wav_from_s16le
+ * - `bytes`がヌルポインタでも ::voicevox_empty_bytes でもないならば、<a href="#voicevox-core-safety">読み込みと書き込みについて有効</a>でなければならない。
+ * - `bytes`がヌルポインタでも ::voicevox_empty_bytes でもないならば、以後<b>ダングリングポインタ</b>(_dangling pointer_)として扱われなくてはならない。
+ * }
+ *
+ * \no-orig-impl{voicevox_bytes_free}
+ */
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+void voicevox_bytes_free(uint8_t *bytes);
+
+/**
+ * ::voicevox_bytes_free の別名。非推奨。
  *
  * @param [in] wav 解放するWAVデータ。nullable
  *
  * \safety{
  * - `wav`がヌルポインタでないならば、以下のAPIで得られたポインタでなくてはいけない。
+ *     - ::voicevox_synthesizer_render
  *     - ::voicevox_synthesizer_synthesis
  *     - ::voicevox_synthesizer_tts
  *     - ::voicevox_synthesizer_tts_from_kana
  *     - ::voicevox_synthesizer_frame_synthesis
- * - `wav`がヌルポインタでないならば、<a href="#voicevox-core-safety">読み込みと書き込みについて有効</a>でなければならない。
- * - `wav`がヌルポインタでないならば、以後<b>ダングリングポインタ</b>(_dangling pointer_)として扱われなくてはならない。
+ *     - ::voicevox_wav_from_s16le
+ * - `wav`がヌルポインタでも ::voicevox_empty_bytes でもないならば、<a href="#voicevox-core-safety">読み込みと書き込みについて有効</a>でなければならない。
+ * - `wav`がヌルポインタでも ::voicevox_empty_bytes でもないならば、以後<b>ダングリングポインタ</b>(_dangling pointer_)として扱われなくてはならない。
  * }
  *
  * \no-orig-impl{voicevox_wav_free}
@@ -1790,6 +2458,7 @@ void voicevox_json_free(char *json);
 #ifdef _WIN32
 __declspec(dllimport)
 #endif
+VOICEVOX_DEPRECATED("use 'voicevox_bytes_free' instead")
 void voicevox_wav_free(uint8_t *wav);
 
 /**
@@ -1938,7 +2607,7 @@ VoicevoxResultCode voicevox_user_dict_remove_word(const struct VoicevoxUserDict 
 /**
  * ユーザー辞書の単語をJSON形式で出力する。
  *
- * 生成したJSON文字列を解放するには ::voicevox_json_free を使う。
+ * 生成したJSON文字列を解放するには ::voicevox_string_free を使う。
  *
  * @param [in] user_dict ユーザー辞書
  * @param [out] output_json 出力先
@@ -2008,5 +2677,7 @@ void voicevox_user_dict_delete(struct VoicevoxUserDict *user_dict);
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus
+
+#undef VOICEVOX_DEPRECATED
 
 #endif  /* VOICEVOX_CORE_INCLUDE_GUARD */

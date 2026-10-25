@@ -46,11 +46,13 @@ voicevox_core.workspace = true
 [dev-dependencies]
 anyhow.workspace = true
 assert_cmd = { workspace = true, features = ["color-auto"] }
+cargo_metadata.workspace = true
 clap = { workspace = true, features = ["derive"] }
 duct.workspace = true
 easy-ext.workspace = true
 inventory.workspace = true
 indexmap = { workspace = true, features = ["serde"] }
+indoc.workspace = true
 itertools.workspace = true
 libloading.workspace = true
 libtest-mimic.workspace = true
@@ -61,9 +63,10 @@ regex.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_with.workspace = true
 tempfile.workspace = true
-test_util.workspace = true
+test_util = { workspace = true, features = ["c-api"] }
 toml.workspace = true
 typetag.workspace = true
+waveadapter.workspace = true
 
 [lints.rust]
 unsafe_code = "allow" # C APIのための操作

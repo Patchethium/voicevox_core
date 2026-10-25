@@ -30,21 +30,20 @@ use super::{
     infer::{
         InferenceDomain,
         domains::{
-            ExperimentalTalkDomain, FrameDecodeDomain, InferenceDomainMap, SingingTeacherDomain,
+            FrameDecodeDomain, InferenceDomainMap, SingingTeacherDomain, StreamingTalkDomain,
             TalkDomain, inference_domain_map, inference_domain_map_values,
         },
     },
     manifest::{
-        Manifest, ManifestDomain, ManifestDomains, ModelFile, ModelFileType, StyleIdToInnerVoiceId,
+        FormatVersion, Manifest, ManifestDomain, ManifestDomains, ModelFile, ModelFileType,
+        StyleIdToInnerVoiceId,
     },
+    metas::{VoiceModelMetaSchemaV1, VoiceModelMetaSchemaV2},
 };
 
 pub(super) type ModelBytesWithInnerVoiceIdsByDomain = inference_domain_map_values!(
     for<D> Option<(StyleIdToInnerVoiceId, EnumMap<D::Operation, ModelBytes>)>
 );
-
-#[cfg(feature = "specta")]
-use specta::Type;
 
 /// 音声モデルID。
 ///
@@ -59,8 +58,8 @@ use specta::Type;
 ///
 /// [VOICEVOX/voicevox_vvm]: https://github.com/VOICEVOX/voicevox_vvm
 /// [VOICEVOX/voicevox_vvm#19]: https://github.com/VOICEVOX/voicevox_vvm/issues/19
-#[cfg_attr(feature = "specta", derive(Type))]
-// #[cfg_attr(doc, doc(alias = "VoicevoxVoiceModelId"))] // remove the doc can please specta, I don't know why
+#[cfg_attr(all(doc, not(feature = "specta")), doc(alias = "VoicevoxVoiceModelId"))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[derive(
     PartialEq,
     Eq,
@@ -251,7 +250,7 @@ impl<A: Async> Inner<A> {
 
         let InferenceDomainMap {
             talk,
-            experimental_talk,
+            streaming_talk,
             singing_teacher,
             frame_decode,
         } = self.with_inference_model_entries(|inference_model_entries| {
@@ -274,7 +273,7 @@ impl<A: Async> Inner<A> {
         .await
         .transpose()?;
 
-        let experimental_talk = OptionFuture::from(experimental_talk.map(
+        let streaming_talk = OptionFuture::from(streaming_talk.map(
             async |(entries, style_id_to_inner_voice_id)| {
                 let [
                     predict_duration,
@@ -341,7 +340,7 @@ impl<A: Async> Inner<A> {
 
         Ok(InferenceDomainMap {
             talk,
-            experimental_talk,
+            streaming_talk,
             singing_teacher,
             frame_decode,
         })
@@ -459,13 +458,30 @@ impl VoiceModelHeader {
             source: Some(source),
         };
 
-        let metas = serde_json::from_slice::<VoiceModelMeta>(metas).map_err(|source| {
-            error(
-                LoadModelErrorKind::InvalidModelFormat,
-                anyhow::Error::from(source)
-                    .context(format!("{}が不正です", manifest.metas_filename())),
-            )
-        })?;
+        let metas = match manifest.vvm_format_version() {
+            FormatVersion::V1 => {
+                let data =
+                    serde_json::from_slice::<VoiceModelMetaSchemaV1>(metas).map_err(|source| {
+                        error(
+                            LoadModelErrorKind::InvalidModelFormat,
+                            anyhow::Error::from(source)
+                                .context(format!("{}が不正です", manifest.metas_filename())),
+                        )
+                    })?;
+                VoiceModelMeta::from_iter(data.into_iter().map(Into::into))
+            }
+            FormatVersion::V2 => {
+                let data =
+                    serde_json::from_slice::<VoiceModelMetaSchemaV2>(metas).map_err(|source| {
+                        error(
+                            LoadModelErrorKind::InvalidModelFormat,
+                            anyhow::Error::from(source)
+                                .context(format!("{}が不正です", manifest.metas_filename())),
+                        )
+                    })?;
+                VoiceModelMeta::from_iter(data.into_iter().map(Into::into))
+            }
+        };
 
         manifest
             .domains()
@@ -527,19 +543,13 @@ impl InferenceDomainMap<ManifestDomains> {
     fn accepts(&self, style_type: StyleType) -> bool {
         let Self {
             talk,
-            experimental_talk,
+            streaming_talk,
             singing_teacher,
             frame_decode,
         } = self;
 
-        // `StyleType::Talk`は`TalkDomain`と`ExperimentalTalkDomain`の二つに対応する
-        assert_eq!(
-            TalkDomain::style_types(),
-            ExperimentalTalkDomain::style_types(),
-        );
-
-        return TalkDomain::contains(style_type)
-            .implies(|| talk.is_some() || experimental_talk.is_some())
+        return TalkDomain::contains(style_type).implies(|| talk.is_some())
+            && StreamingTalkDomain::contains(style_type).implies(|| streaming_talk.is_some())
             && SingingTeacherDomain::contains(style_type).implies(|| singing_teacher.is_some())
             && FrameDecodeDomain::contains(style_type).implies(|| frame_decode.is_some());
 
@@ -565,19 +575,27 @@ pub(crate) mod blocking {
         path::Path,
     };
 
-    use crate::{VoiceModelMeta, asyncs::SingleTasked, future::FutureExt as _};
+    use crate::{
+        VoiceModelMeta, assert::assert_send_sync, asyncs::SingleTasked, future::FutureExt as _,
+    };
 
     use super::{Inner, VoiceModelId};
 
     /// 音声モデルファイル。
     ///
     /// VVMファイルと対応する。
-    #[cfg_attr(doc, doc(alias = "VoicevoxVoiceModelFile"))]
+    #[cfg_attr(
+        all(doc, not(feature = "specta")),
+        doc(alias = "VoicevoxVoiceModelFile")
+    )]
     pub struct VoiceModelFile(Inner<SingleTasked>);
 
     impl self::VoiceModelFile {
         /// VVMファイルを開く。
-        #[cfg_attr(doc, doc(alias = "voicevox_voice_model_file_open"))]
+        #[cfg_attr(
+            all(doc, not(feature = "specta")),
+            doc(alias = "voicevox_voice_model_file_open")
+        )]
         pub fn open(path: impl AsRef<Path>) -> crate::Result<Self> {
             Inner::open(path).block_on().map(Self)
         }
@@ -595,13 +613,19 @@ pub(crate) mod blocking {
         /// ID。
         ///
         /// 詳細は[`VoiceModelId`]を参照。
-        #[cfg_attr(doc, doc(alias = "voicevox_voice_model_file_id"))]
+        #[cfg_attr(
+            all(doc, not(feature = "specta")),
+            doc(alias = "voicevox_voice_model_file_id")
+        )]
         pub fn id(&self) -> VoiceModelId {
             self.0.id()
         }
 
         /// メタ情報。
-        #[cfg_attr(doc, doc(alias = "voicevox_voice_model_file_create_metas_json"))]
+        #[cfg_attr(
+            all(doc, not(feature = "specta")),
+            doc(alias = "voicevox_voice_model_file_create_metas_json")
+        )]
         pub fn metas(&self) -> &VoiceModelMeta {
             self.0.metas()
         }
@@ -613,6 +637,8 @@ pub(crate) mod blocking {
             self.0.fill_debug_struct_body(fmt)
         }
     }
+
+    assert_send_sync!(VoiceModelFile);
 }
 
 pub(crate) mod nonblocking {
@@ -621,7 +647,7 @@ pub(crate) mod nonblocking {
         path::Path,
     };
 
-    use crate::{Result, VoiceModelMeta, asyncs::BlockingThreadPool};
+    use crate::{Result, VoiceModelMeta, assert::assert_send_sync, asyncs::BlockingThreadPool};
 
     use super::{Inner, VoiceModelId};
 
@@ -673,6 +699,8 @@ pub(crate) mod nonblocking {
             self.0.fill_debug_struct_body(fmt)
         }
     }
+
+    assert_send_sync!(VoiceModelFile);
 }
 
 #[cfg(test)]

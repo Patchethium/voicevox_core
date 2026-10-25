@@ -9,9 +9,6 @@ use serde::Serialize;
 
 use crate::convert::ToJsonValue;
 
-#[cfg(feature = "specta")]
-use specta::Type;
-
 pub(crate) fn test_gpus(
     gpus: impl IntoIterator<Item = GpuSpec>,
     inference_rt_name: &'static str,
@@ -70,8 +67,7 @@ fn test_gpu(
 /// # }
 /// ```
 // 将来の互換性保証のため、`Deserialize`は実装するべきではない
-
-#[cfg_attr(feature = "specta", derive(Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, BitAnd, Serialize)]
 #[non_exhaustive]
 pub struct SupportedDevices {
@@ -181,7 +177,7 @@ enum DeviceAvailability {
     NotSupportedByCurrentLoadedInferenceRuntime(&'static str),
 }
 
-#[cfg_attr(feature = "specta", derive(Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[derive(Clone, Copy, PartialEq, Debug, derive_more::Display)]
 pub(crate) enum DeviceSpec {
     #[display("CPU")]
@@ -191,7 +187,7 @@ pub(crate) enum DeviceSpec {
     Gpu(GpuSpec),
 }
 
-#[cfg_attr(feature = "specta", derive(Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, derive_more::Display)]
 pub(crate) enum GpuSpec {
     #[display("CUDA (device_id=0)")]

@@ -169,8 +169,14 @@ where
                         )));
                         or_panic!(env.throw(exc));
                     }
+                    JavaApiError::IllegalArgument(msg) => {
+                        or_panic!(env.throw_new("java/lang/IllegalArgumentException", msg))
+                    }
                     JavaApiError::IllegalState(msg) => {
                         or_panic!(env.throw_new("java/lang/IllegalStateException", msg))
+                    }
+                    JavaApiError::IndexOutOfBounds(msg) => {
+                        or_panic!(env.throw_new("java/lang/IndexOutOfBoundsException", msg))
                     }
                 };
             }
@@ -199,7 +205,11 @@ pub(crate) enum JavaApiError {
 
     DeQuery(String, serde_json::Error),
 
+    IllegalArgument(String),
+
     IllegalState(String),
+
+    IndexOutOfBounds(String),
 }
 
 pub(crate) struct Closable<T: HasJavaClassIdent>(std::sync::RwLock<MaybeClosed<T>>);

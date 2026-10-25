@@ -19,7 +19,7 @@ fun main(args: Array<String>) {
   val onnxruntime by
       parser
           .option(ArgType.String, description = "ONNX Runtimeのファイル名（モジュール名）もしくはファイルパス")
-          .default(Onnxruntime.LIB_VERSIONED_FILENAME)
+          .default(Onnxruntime.LIB_RECOMMENDED_VERSIONED_FILENAME)
   val dictDir by
       parser
           .option(ArgType.String, description = "Open JTalkの辞書ディレクトリ")
@@ -33,7 +33,7 @@ fun main(args: Array<String>) {
 
   parser.parse(args)
 
-  println("Inititalizing: ${mode}, ${onnxruntime}, ${dictDir}")
+  println("Initializing: ${mode}, ${onnxruntime}, ${dictDir}")
   val ort = Onnxruntime.loadOnce().filename(onnxruntime).perform()
   val openJtalk = OpenJtalk(dictDir)
   val synthesizer =
@@ -49,7 +49,7 @@ fun main(args: Array<String>) {
 
   println("Loading: ${vvmPath}")
   val vvm = VoiceModelFile(vvmPath)
-  synthesizer.loadVoiceModel(vvm)
+  synthesizer.loadVoiceModel(vvm).perform()
 
   println("Creating an AudioQuery from the text: ${text}")
   val audioQuery = synthesizer.createAudioQuery(text, styleId)

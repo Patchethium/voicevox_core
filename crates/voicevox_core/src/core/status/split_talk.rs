@@ -38,7 +38,7 @@ pub(super) fn create_session_set<R: InferenceRuntime>(
     contents: &InferenceDomainMap<ModelBytesWithInnerVoiceIdsByDomain>,
     session_options: &InferenceDomainMap<SessionOptionsByDomain>,
 ) -> SessionSetWithInnerVoiceIds<R> {
-    if contents.experimental_talk.is_some() {
+    if contents.streaming_talk.is_some() {
         return None;
     }
     let (inner_voice_ids, models) = contents.talk.as_ref()?;

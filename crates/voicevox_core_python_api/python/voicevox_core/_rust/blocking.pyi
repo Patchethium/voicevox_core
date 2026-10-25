@@ -1,5 +1,6 @@
+from collections.abc import Iterator
 from os import PathLike
-from typing import TYPE_CHECKING, NoReturn, Union
+from typing import TYPE_CHECKING, NoReturn, SupportsFloat, Union
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -9,12 +10,14 @@ if TYPE_CHECKING:
         AudioQuery,
         CharacterMeta,
         FrameAudioQuery,
+        OnExistingVoiceModelId,
         Score,
         StyleId,
         SupportedDevices,
         UserDictWord,
         VoiceModelId,
     )
+    from voicevox_core._rust import AudioFeature, AudioFeatureSlice
 
 class VoiceModelFile:
     """
@@ -85,21 +88,27 @@ class Onnxruntime:
 
     # ここの定数値が本物と合致するかどうかは、test_type_stub_consts.pyで担保する。
 
-    LIB_NAME: str = "voicevox_onnxruntime"
-    """ONNX Runtimeのライブラリ名。"""
+    LIB_MIN_REQUIRED_MINOR_VERSION: int = 17
+    """必要なONNX Runtime 1.xの最小マイナーバージョン。"""
 
-    LIB_VERSION: str = "1.17.3"
+    LIB_MAX_SUPPORTED_MINOR_VERSION: int = 29
+    """サポートされるONNX Runtime 1.xの最大マイナーバージョン。"""
+
+    LIB_RECOMMENDED_NAME: str = "voicevox_onnxruntime"
+    """推奨されるONNX Runtimeのライブラリ名。"""
+
+    LIB_RECOMMENDED_VERSION: str = "1.23.2"
     """推奨されるONNX Runtimeのバージョン。"""
 
-    LIB_VERSIONED_FILENAME: str
+    LIB_RECOMMENDED_VERSIONED_FILENAME: str
     """
-    :attr:`LIB_NAME` と :attr:`LIB_VERSION` からなる動的ライブラリのファイル名。
+    :attr:`LIB_RECOMMENDED_NAME` と :attr:`LIB_RECOMMENDED_VERSION` からなる動的ライブラリのファイル名。
 
-    WindowsとAndroidでは :attr:`LIB_UNVERSIONED_FILENAME` と同じ。
+    WindowsとAndroidでは :attr:`LIB_RECOMMENDED_UNVERSIONED_FILENAME` と同じ。
     """
 
-    LIB_UNVERSIONED_FILENAME: str
-    """:attr:`LIB_NAME` からなる動的ライブラリのファイル名。"""
+    LIB_RECOMMENDED_UNVERSIONED_FILENAME: str
+    """:attr:`LIB_RECOMMENDED_NAME` からなる動的ライブラリのファイル名。"""
 
     def __new__(cls, *args: object, **kwargs: object) -> NoReturn: ...
     @staticmethod
@@ -111,9 +120,15 @@ class Onnxruntime:
         """
         ...
     @staticmethod
-    def load_once(*, filename: str = LIB_VERSIONED_FILENAME) -> "Onnxruntime":
+    def load_once(
+        *, filename: str = LIB_RECOMMENDED_VERSIONED_FILENAME
+    ) -> "Onnxruntime":
         """
         ONNX Runtimeをロードして初期化する。
+
+        対象のONNX Runtimeのマイナーバージョンは :attr:`LIB_MIN_REQUIRED_MINOR_VERSION`
+        以上でなくてはならない。 :attr:`LIB_MAX_SUPPORTED_MINOR_VERSION`
+        より大きい場合は警告を出す。
 
         一度成功したら、以後は引数を無視して同じインスタンスを返す。
 
@@ -168,13 +183,37 @@ class OpenJtalk:
         """
         ...
 
-class AudioFeature:
-    @property
-    def frame_length(self) -> int: ...
-    @property
-    def frame_rate(self) -> float: ...
+class SynthesisStream(Iterator[bytes]):
+    """
+    音声合成を都度行うことで、WAVデータを分割で返す :class:`Iterator`。
+
+    :attr:`Synthesizer.streaming_synthesis` により作られる。
+    """
+
+    def __new__(cls, *args: object, **kwargs: object) -> NoReturn: ...
+    def __length_hint__(self) -> int: ...
+    def __iter__(self) -> "SynthesisStream": ...
+    def __next__(self) -> bytes:
+        """
+        :class:`Iterator` として要素を返す。
+
+        Raises
+        ------
+        StopIteration
+            要素が無い場合。
+        StyleNotFoundError
+            利用中の音声モデルが :attr:`アンロード <Synthesizer.unload_voice_model>`
+            されていた場合。
+        RunModelError
+            推論に失敗した、または推論結果が異常だった場合。
+        """
+        ...
     def __repr__(self) -> str: ...
-    def __eq__(self, other: object) -> bool: ...
+    def __enter__(self) -> "SynthesisStream": ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+    def clear(self) -> None:
+        """このイテレータの要素をすべて捨てて空にする。"""
+        ...
 
 class Synthesizer:
     """
@@ -218,14 +257,21 @@ class Synthesizer:
     def metas(self) -> list[CharacterMeta]:
         """メタ情報。"""
         ...
-    def load_voice_model(self, model: VoiceModelFile) -> None:
+    def load_voice_model(
+        self,
+        model: VoiceModelFile,
+        *,
+        on_existing: OnExistingVoiceModelId = "ERROR",
+    ) -> None:
         """
         モデルを読み込む。
 
         Parameters
         ----------
-        style_id
-            読み込むモデルのスタイルID。
+        model
+            読み込むモデル。
+        on_existing
+            同じ ``id`` の :class:`VoiceModelFile` が既に読み込まれていたときのふるまい。
         """
         ...
     def unload_voice_model(self, voice_model_id: VoiceModelId | UUID) -> None:
@@ -408,19 +454,50 @@ class Synthesizer:
             スタイルID。
         """
         ...
-    def __precompute_render(
+    def create_audio_feature(
         self,
         audio_query: AudioQuery,
         style_id: StyleId | int,
         *,
         enable_interrogative_upspeak: bool = True,
-    ) -> AudioFeature: ...
-    def __render(
-        self,
-        audio: AudioFeature,
-        start: int,
-        stop: int,
-    ) -> bytes: ...
+    ) -> AudioFeature:
+        """
+        :class:`AudioQuery` から中間表現である :class:`AudioFeature` を生成する。
+
+        .. warning::
+
+            ストリーミング音声合成にはいくつか注意事項がある。ユーザーガイドの
+            `ストリーミング音声合成 <https://github.com/VOICEVOX/voicevox_core/blob/main/docs/guide/user/usage.md#ストリーミング音声合成>`_
+            を参照。
+
+        Parameters
+        ----------
+        audio_query
+            :class:`AudioQuery` 。
+        style_id
+            スタイルID。
+        enable_interrogative_upspeak
+            疑問文の調整を有効にするかどうか。
+
+        Returns
+        -------
+        :class:`AudioFeature` 。
+        """
+        ...
+    def render(self, audio: AudioFeatureSlice | AudioFeature) -> bytes:
+        """
+        :class:`AudioFeatureSlice` からPCM形式の音声バイナリを生成する。
+
+        Parameters
+        ----------
+        audio
+            :class:`AudioFeatureSlice`。
+
+        Returns
+        -------
+        signed 16-bit little endianのPCMデータ。
+        """
+        ...
     def synthesis(
         self,
         audio_query: AudioQuery,
@@ -443,6 +520,142 @@ class Synthesizer:
         Returns
         -------
         WAVデータ。
+        """
+        ...
+    # FIXME: <../../test/test_type_stub_consts.py>で実物のsignatureと比較する。
+    def streaming_synthesis(
+        self,
+        audio_query: AudioQuery,
+        style_id: StyleId | int,
+        *,
+        start_offset: SupportsFloat = 0.0,
+        segment_length: SupportsFloat = 0.3,
+        enable_interrogative_upspeak: bool = True,
+    ) -> SynthesisStream:
+        """
+        :class:`AudioQuery <voicevox_core.AudioQuery>` からストリーミングで音声合成する。
+
+        このメソッド自体の実行は一瞬で終わる。
+
+        このメソッドが返す :class:`SynthesisStream`
+        は最初に必ず、WAVデータの先頭部分を示す44バイトのデータを返す。このときエラーが送出されることはない。Pythonの
+        :mod:`wave`
+        のようなツールを利用するなどすれば情報を読み取ることができる。音声をリアルタイムに再生するだけなら多くの場合この44バイトのデータは不要。
+
+        ２番目以降の要素から ``s16le``
+        形式の音声波形が始まる。要素が要求されていない間は音声合成が行われない。そのため例えば再生バッファへの書き込みがスレッドを長時間ブロックする場合に、滞りなく音声合成し続けるためにFIFOキューなどを利用しなければならないことがある。このような対処を１行で行えるAPIを
+        `#1467 <https://github.com/VOICEVOX/voicevox_core/issues/1467>`_ で議論中。
+
+        .. warning::
+
+            ストリーミング音声合成には他にもいくつか注意事項がある。ユーザーガイドの
+            `ストリーミング音声合成 <https://github.com/VOICEVOX/voicevox_core/blob/main/docs/guide/user/usage.md#ストリーミング音声合成>`_
+            を参照。
+
+        Parameters
+        ----------
+        audio_query
+            :class:`AudioQuery <voicevox_core.AudioQuery>`。
+        style_id
+            スタイルID。
+        start_offset
+            音声の開始位置。単位は秒。``0.0 <= start_offset * FRAME_RATE <= frame_length``
+            でなければならない。ここで ``frame_length`` は
+
+            .. code-block::
+
+                audio_query.frame_length(
+                    enable_interrogative_upspeak=enable_interrogative_upspeak,
+                )
+
+            で得られるものとする。
+        segment_length
+            一度に合成する音声の長さ。単位は秒。``0.5 < segment_length * FRAME_RATE``
+            でなければならない。
+        enable_interrogative_upspeak
+            疑問文の調整を有効にするかどうか。この値を ``False``
+            にすることで上記の ``frame_length`` が小さくなる場合があることに注意。
+
+        Returns
+        -------
+        :class:`SynthesisStream`。
+
+        Raises
+        ------
+        ValueError
+            - ``0.0 <= start_offset * FRAME_RATE <= frame_length``
+              を満たさない場合。ここで ``frame_length`` は
+
+              .. code-block::
+
+                  audio_query.frame_length(
+                      enable_interrogative_upspeak=enable_interrogative_upspeak,
+                  )
+
+              で得られるものとする。
+            - ``0.5 < segment_length * FRAME_RATE`` を満たさない場合。
+        InvalidQueryError
+            ``audio_query`` が :attr:`不正 <voicevox_core.AudioQuery.validate>` な場合。
+        StyleNotFoundError
+            ``style_id`` に対応する :attr:`"streaming_talk" <voicevox_core.StyleType>`
+            のスタイルが見つからなかった場合。
+        RunModelError
+            推論に失敗した、または推論結果が異常だった場合。
+
+        Examples
+        --------
+
+        >>> STYLE_ID: voicevox_core.StyleId
+        >>> synth: voicevox_core.blocking.Synthesizer
+        >>> query: voicevox_core.AudioQuery
+        >>>
+        >>> # ストリームの作成は一瞬。
+        >>> stream = synth.streaming_synthesis(query, STYLE_ID)
+        >>>
+        >>> # 最初の要素はWAVの先頭部分で、音声波形本体の手前まで。
+        >>> _wav_header = next(stream)
+        >>>
+        >>> # 少しずつ音声合成。デフォルトでは28フレーム ≒ 0.3秒ずつ生成。
+        >>> for pcm in stream:
+        ...     _do_something(pcm)
+
+        >>> from voicevox_core import FRAME_RATE
+        >>>
+        >>> frame_length = query.frame_length()
+        >>> if frame_length < 2:
+        ...     raise RuntimeError("unimplemented")
+        >>>
+        >>> stream = synth.streaming_synthesis(
+        ...     query,
+        ...     STYLE_ID,
+        ...     segment_length=(frame_length + 0.5) / FRAME_RATE / 2.0,  # ２分割
+        ... )
+        >>> _wav_header, segment1, segment2 = stream
+
+        >>> stream = synth.streaming_synthesis(
+        ...     query,
+        ...     STYLE_ID,
+        ...     segment_length=0.5 / FRAME_RATE,  # 0.005333333333333333
+        ... )
+        Traceback (most recent call last):
+        ValueError: `segment_length * 93.75` must be greater than `0.5`
+
+        >>> # WAVデータ先頭部分の中身を見る場合
+        >>> wav_header = _wav_header
+        >>>
+        >>> import struct
+        >>> import wave
+        >>> from io import BytesIO
+        >>>
+        >>> with BytesIO(wav_header) as buf, wave.open(buf, "rb") as h:
+        ...     assert h.getnchannels() == (2 if query.output_stereo else 1)
+        ...     assert h.getsampwidth() == struct.calcsize("h")
+        ...     assert h.getframerate() == query.output_sampling_rate
+        ...     if query.output_sampling_rate == 24000:
+        ...         assert h.getnframes() == (
+        ...             query.frame_length() * int(24000 / FRAME_RATE)
+        ...         )
+        ...     assert h.readframes(1) == b""
         """
         ...
     def tts_from_kana(

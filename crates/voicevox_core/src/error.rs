@@ -1,11 +1,12 @@
 use crate::{
     StyleId, StyleType, VoiceModelId,
+    assert::assert_send_sync,
     core::devices::DeviceAvailabilities,
     engine::{
-        DEFAULT_SAMPLING_RATE,
         song::queries::Key,
         talk::{KanaParseError, user_dict::InvalidWordError},
     },
+    frame::DEFAULT_SAMPLING_RATE,
 };
 //use engine::
 use duplicate::duplicate_item;
@@ -13,9 +14,6 @@ use itertools::Itertools as _;
 use std::{collections::BTreeSet, fmt::Debug, path::PathBuf};
 use thiserror::Error;
 use uuid::Uuid;
-
-#[cfg(feature = "specta")]
-use specta::Type;
 
 /// VOICEVOX COREのエラー。
 #[derive(Error, Debug)]
@@ -33,6 +31,8 @@ impl From<E> for Error {
         Self(err.into())
     }
 }
+
+assert_send_sync!(Error);
 
 impl Error {
     /// 対応する[`ErrorKind`]を返す。
@@ -146,12 +146,15 @@ pub(crate) enum ErrorRepr {
 }
 
 /// エラーの種類。
-#[expect(
-    clippy::manual_non_exhaustive,
-    reason = "バインディングを作るときはexhaustiveとして扱いたい"
+#[cfg_attr(
+    not(feature = "specta"),
+    expect(
+        clippy::manual_non_exhaustive,
+        reason = "バインディングを作るときはexhaustiveとして扱いたい"
+    )
 )]
 #[cfg_attr(all(doc, not(feature = "specta")), doc(alias = "VoicevoxResultCode"))]
-#[cfg_attr(feature = "specta", derive(Type))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum ErrorKind {
     /// open_jtalk辞書ファイルが読み込まれていない。
@@ -192,7 +195,7 @@ pub enum ErrorKind {
     WordNotFound,
     /// OpenJTalkのユーザー辞書の設定に失敗した。
     UseUserDict,
-    /// ユーザー辞書の単語のバリデーションに失敗した。
+    /// ユーザー辞書の単語、もしくはその一部のバリデーションに失敗した。
     InvalidWord,
     /// [`AudioQuery`]、[`FrameAudioQuery`]、[`Score`]、もしくはその一部が不正。
     ///
@@ -205,9 +208,7 @@ pub enum ErrorKind {
     /// [`FrameAudioQuery`]: crate::FrameAudioQuery
     /// [`Score`]: crate::Score
     IncompatibleQueries,
-    // Different from main, #[doc(hidden)] will break specta
-    // we simply comment it out
-    // #[doc(hidden)]
+    #[cfg_attr(not(feature = "specta"), doc(hidden))]
     __NonExhaustive,
 }
 
@@ -274,8 +275,8 @@ pub(crate) enum InvalidQueryErrorSource {
     #[error("\"sil\"を含む文字列である必要があります")]
     MustContainSil,
 
-    #[error("`0`にすることはできません")]
-    IsZero,
+    #[error("アクセント位置はモーラ数を超過してはいけません")]
+    TooLargeAccent,
 
     #[error("0より大きい{DEFAULT_SAMPLING_RATE}の倍数でなければなりません")]
     IsNotMultipleOfBaseSamplingRate,

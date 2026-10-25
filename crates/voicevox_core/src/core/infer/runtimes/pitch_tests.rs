@@ -173,8 +173,8 @@ fn pitch_api_parity_preservation_and_legacy_determinism() -> anyhow::Result<()> 
             .chain(new.pause_mora.iter_mut())
             .zip(old.moras.iter().chain(old.pause_mora.iter()))
         {
-            if old.pitch == 0.0 {
-                assert_eq!(new.pitch, 0.0);
+            if old.pitch.get() == 0.0 {
+                assert_eq!(new.pitch.get(), 0.0);
             }
             new.pitch = old.pitch;
         }
@@ -209,7 +209,7 @@ fn pitch_api_parity_preservation_and_legacy_determinism() -> anyhow::Result<()> 
         phrases
             .iter()
             .flat_map(|p| p.moras.iter().chain(p.pause_mora.iter()))
-            .map(|m| m.pitch)
+            .map(|m| m.pitch.get())
             .collect()
     };
     let original_pitches = pitches(&noisy);
@@ -292,8 +292,8 @@ fn pitch_api_parity_preservation_and_legacy_determinism() -> anyhow::Result<()> 
             .chain(new.pause_mora.iter_mut())
             .zip(old.moras.iter().chain(old.pause_mora.iter()))
         {
-            if old.pitch == 0.0 {
-                assert_eq!(new.pitch, 0.0);
+            if old.pitch.get() == 0.0 {
+                assert_eq!(new.pitch.get(), 0.0);
             }
             new.pitch = old.pitch;
         }
@@ -343,7 +343,7 @@ fn unsupported_pitch_does_not_register_partial_model() -> anyhow::Result<()> {
         rt,
         InferenceDomainMap {
             talk: enum_map::enum_map!(_ => options),
-            experimental_talk: enum_map::enum_map!(_ => options),
+            streaming_talk: enum_map::enum_map!(_ => options),
             singing_teacher: enum_map::enum_map!(_ => options),
             frame_decode: enum_map::enum_map!(_ => options),
         },
@@ -385,7 +385,7 @@ fn unsupported_pitch_does_not_register_partial_model() -> anyhow::Result<()> {
     let output = status
         .run_session::<crate::asyncs::SingleTasked, _>(
             model.id(),
-            crate::core::infer::domains::experimental_talk::PredictIntonationInput {
+            crate::core::infer::domains::streaming_talk::PredictIntonationInput {
                 length: ndarray::arr0(5),
                 vowel_phoneme_list: ndarray::arr1(&[0, 14, 6, 30, 0]),
                 consonant_phoneme_list: ndarray::arr1(&[-1, 37, 35, 37, -1]),
@@ -407,10 +407,11 @@ fn unsupported_pitch_does_not_register_partial_model() -> anyhow::Result<()> {
 }
 
 /// Explicit local diagnostic; production models are never fixtures or exported persistently.
+#[cfg(feature = "load-onnxruntime")]
 #[test]
 #[ignore = "set AZALEA_PITCH_ORT and AZALEA_PITCH_VVM_DIR; run in a separate test process"]
 fn installed_pitch_diagnostic() -> anyhow::Result<()> {
-    use crate::core::infer::domains::{ExperimentalTalkOperation, TalkOperation};
+    use crate::core::infer::domains::{StreamingTalkOperation, TalkOperation};
     let rt = blocking::Onnxruntime::load_once()
         .filename(std::env::var("AZALEA_PITCH_ORT")?)
         .perform()?;
@@ -435,10 +436,11 @@ fn installed_pitch_diagnostic() -> anyhow::Result<()> {
                     .map(|(ids, models)| (ids, &models[TalkOperation::PredictIntonation])),
             ),
             (
-                "experimental_talk",
-                contents.experimental_talk.as_ref().map(|(ids, models)| {
-                    (ids, &models[ExperimentalTalkOperation::PredictIntonation])
-                }),
+                "streaming_talk",
+                contents
+                    .streaming_talk
+                    .as_ref()
+                    .map(|(ids, models)| (ids, &models[StreamingTalkOperation::PredictIntonation])),
             ),
         ] {
             let Some((ids, bytes)) = pair else { continue };
@@ -619,19 +621,19 @@ fn sequence_collection_feedback_and_rejection() -> anyhow::Result<()> {
         .version = 13;
     fn axes_inputs(graph: &mut onnx_protobuf::GraphProto) {
         for (index, node) in graph.node.iter_mut().enumerate() {
-            if matches!(node.op_type.as_str(), "Squeeze" | "Unsqueeze" | "ReduceSum") {
-                if let Some(at) = node.attribute.iter().position(|a| a.name == "axes") {
-                    let axes = node.attribute.remove(at).ints;
-                    let name = format!("fixture_axes_{index}");
-                    graph.initializer.push(onnx_protobuf::TensorProto {
-                        name: name.clone(),
-                        data_type: 7,
-                        dims: vec![axes.len() as i64],
-                        int64_data: axes,
-                        ..Default::default()
-                    });
-                    node.input.push(name);
-                }
+            if matches!(node.op_type.as_str(), "Squeeze" | "Unsqueeze" | "ReduceSum")
+                && let Some(at) = node.attribute.iter().position(|a| a.name == "axes")
+            {
+                let axes = node.attribute.remove(at).ints;
+                let name = format!("fixture_axes_{index}");
+                graph.initializer.push(onnx_protobuf::TensorProto {
+                    name: name.clone(),
+                    data_type: 7,
+                    dims: vec![axes.len() as i64],
+                    int64_data: axes,
+                    ..Default::default()
+                });
+                node.input.push(name);
             }
             for attribute in &mut node.attribute {
                 if let Some(graph) = attribute.g.as_mut() {
