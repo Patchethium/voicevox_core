@@ -1317,6 +1317,19 @@ impl<R: InferenceRuntime> Status<R> {
         prefix: ndarray::Array1<f32>,
         prefix_mask: ndarray::Array1<i64>,
     ) -> Result<Vec<NonNaNFinite<f32>>> {
+        // Untransformed pitch predictors take neither noise nor fixed pitches (`azalea` fork).
+        if !crate::core::infer::runtimes::onnxruntime::can_export_models()
+            && (noise.iter().any(|&noise| noise != 0.)
+                || prefix_mask.iter().any(|&fixed| fixed != 0))
+        {
+            return Err(crate::error::InvalidQueryError {
+                what: "pitch noise and pitch completion need an ONNX Runtime that can export \
+                       models",
+                value: None,
+                source: None,
+            }
+            .into());
+        }
         if self.contains_domain::<SplitTalkDomain>(style_id) {
             return self
                 .split_talk_predict_intonation::<A>(

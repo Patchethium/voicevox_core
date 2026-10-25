@@ -61,6 +61,15 @@ temporary directory and enough disk space for each exported predictor. Binary
 VVMs require VOICEVOX ONNX Runtime. No persistent conversion cache, Python
 runtime, installation edits, or separate conversion step is involved.
 
+Exporting requires a runtime that allows it. VOICEVOX ONNX Runtime 1.23 refuses
+to export models, which a one-node probe detects once per process
+(`Onnxruntime::supports_pitch_control`). Pitch predictors then load
+untransformed: predictions use zero noise, the pitch-control inputs are dropped
+when they run, and nonzero noise or a fixed prefix is an invalid-query error.
+Monolithic talk decoders are not split either, so they synthesize whole rather
+than stream. Graph-transformation failures on a runtime that can export still
+fail loading.
+
 The transformer supports standard ONNX opsets 12–20 and recognizes the reference
 GRU/Conv predictor by connectivity rather than internal names:
 

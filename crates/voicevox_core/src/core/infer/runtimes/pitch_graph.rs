@@ -5,9 +5,10 @@ use onnx_protobuf::{
     TypeProto, ValueInfoProto, tensor_shape_proto, type_proto,
 };
 
-pub(super) const NOISE_INPUT: &str = "azalea_pitch_noise";
-pub(super) const PREFIX_INPUT: &str = "azalea_pitch_prefix";
-pub(super) const PREFIX_MASK_INPUT: &str = "azalea_pitch_prefix_mask";
+pub(super) use super::super::{
+    PITCH_NOISE_INPUT as NOISE_INPUT, PITCH_PREFIX_INPUT as PREFIX_INPUT,
+    PITCH_PREFIX_MASK_INPUT as PREFIX_MASK_INPUT,
+};
 const MARKER: &str = "azalea.pitch_noise.version";
 const VERSION: &str = "2";
 
@@ -335,6 +336,51 @@ fn rewrite_loop(body: &mut GraphProto, index: usize) -> anyhow::Result<()> {
         ],
     );
     Ok(())
+}
+
+/// A one-node float32 `Identity` model, exported to test whether the runtime can export
+/// models at all.
+pub(super) fn export_probe_model() -> Vec<u8> {
+    let mut dimension = tensor_shape_proto::Dimension::new();
+    dimension.set_dim_value(1);
+    let mut ty = TypeProto::new();
+    ty.set_tensor_type(type_proto::Tensor {
+        elem_type: 1,
+        shape: Some(TensorShapeProto {
+            dim: vec![dimension],
+            ..Default::default()
+        })
+        .into(),
+        ..Default::default()
+    });
+    let value = |name: &str| ValueInfoProto {
+        name: name.into(),
+        type_: Some(ty.clone()).into(),
+        ..Default::default()
+    };
+    ModelProto {
+        ir_version: 8,
+        opset_import: vec![onnx_protobuf::OperatorSetIdProto {
+            version: 17,
+            ..Default::default()
+        }],
+        graph: Some(GraphProto {
+            name: "export_probe".into(),
+            node: vec![NodeProto {
+                op_type: "Identity".into(),
+                input: vec!["x".into()],
+                output: vec!["y".into()],
+                ..Default::default()
+            }],
+            input: vec![value("x")],
+            output: vec![value("y")],
+            ..Default::default()
+        })
+        .into(),
+        ..Default::default()
+    }
+    .write_to_bytes()
+    .expect("a hand-built model should serialize")
 }
 
 #[cfg(test)]

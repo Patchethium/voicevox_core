@@ -8,7 +8,7 @@ use crate::error::ErrorRepr;
 
 use super::{
     super::voice_model::ModelBytes, InferenceDomain, InferenceInputSignature, InferenceOperation,
-    InferenceRuntime, InferenceSessionOptions, InferenceSignature, ParamInfo,
+    InferenceRuntime, InferenceSessionOptions, InferenceSignature, PITCH_CONTROL_INPUTS, ParamInfo,
 };
 
 pub(crate) struct InferenceSessionSet<R: InferenceRuntime, D: InferenceDomain>(
@@ -43,8 +43,16 @@ impl<R: InferenceRuntime, D: InferenceDomain> InferenceSessionSet<R, D> {
                         )
                     })?;
 
-                check_param_infos(expected_input_param_infos, &actual_input_param_infos)?;
-                check_param_infos(expected_output_param_infos, &actual_output_param_infos)?;
+                let expected_input_param_infos = expected_inputs(
+                    D::needs_pitch_noise(op),
+                    expected_input_param_infos,
+                    &actual_input_param_infos,
+                );
+                check_param_infos(&expected_input_param_infos, &actual_input_param_infos)?;
+                check_param_infos(
+                    &expected_output_param_infos.iter().collect::<Vec<_>>(),
+                    &actual_output_param_infos,
+                )?;
 
                 Ok((op.into_usize(), sess.into()))
             })
@@ -55,23 +63,25 @@ impl<R: InferenceRuntime, D: InferenceDomain> InferenceSessionSet<R, D> {
         })));
 
         fn check_param_infos<D: PartialEq + Display>(
-            expected: &[ParamInfo<D>],
+            expected: &[&ParamInfo<D>],
             actual: &[ParamInfo<D>],
         ) -> anyhow::Result<()> {
             if !(expected.len() == actual.len()
                 && itertools::zip_eq(expected, actual)
                     .all(|(expected, actual)| expected.accepts(actual)))
             {
-                let expected = display_param_infos(expected);
+                let expected = display_param_infos(expected.iter().copied());
                 let actual = display_param_infos(actual);
                 bail!("expected {{{expected}}}, got {{{actual}}}")
             }
             Ok(())
         }
 
-        fn display_param_infos(infos: &[ParamInfo<impl Display>]) -> impl Display {
+        fn display_param_infos<'a, D: Display + 'a>(
+            infos: impl IntoIterator<Item = &'a ParamInfo<D>>,
+        ) -> impl Display {
             infos
-                .iter()
+                .into_iter()
                 .map(|ParamInfo { name, dt, ndim }| {
                     let brackets = match *ndim {
                         Some(ndim) => &"[]".repeat(ndim),
@@ -82,6 +92,21 @@ impl<R: InferenceRuntime, D: InferenceDomain> InferenceSessionSet<R, D> {
                 .join(", ")
         }
     }
+}
+
+/// The inputs a session must declare: a pitch predictor the runtime could not transform lacks
+/// the pitch-control inputs (`azalea` fork).
+fn expected_inputs<'a, K>(
+    needs_pitch_noise: bool,
+    expected: &'a [ParamInfo<K>],
+    actual: &[ParamInfo<K>],
+) -> Vec<&'a ParamInfo<K>> {
+    let is_pitch_control = |info: &ParamInfo<K>| PITCH_CONTROL_INPUTS.contains(&&*info.name);
+    let untransformed = needs_pitch_noise && !actual.iter().any(is_pitch_control);
+    expected
+        .iter()
+        .filter(|info| !(untransformed && is_pitch_control(info)))
+        .collect()
 }
 
 impl<R: InferenceRuntime, D: InferenceDomain> InferenceSessionSet<R, D> {
@@ -114,5 +139,54 @@ impl<R: InferenceRuntime, I: InferenceInputSignature> InferenceSessionCell<R, I>
         .await
         .map_err(|source| ErrorRepr::RunModel { note: None, source })
         .map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{super::InputScalarKind, ParamInfo, expected_inputs};
+
+    fn infos(names: &[&'static str]) -> Vec<ParamInfo<InputScalarKind>> {
+        names
+            .iter()
+            .map(|&name| ParamInfo {
+                name: name.into(),
+                dt: InputScalarKind::Float32,
+                ndim: Some(1),
+            })
+            .collect()
+    }
+
+    fn names(infos: Vec<&ParamInfo<InputScalarKind>>) -> Vec<&str> {
+        infos.into_iter().map(|info| &*info.name).collect()
+    }
+
+    const TRANSFORMED: &[&str] = &[
+        "length",
+        "azalea_pitch_noise",
+        "azalea_pitch_prefix",
+        "azalea_pitch_prefix_mask",
+    ];
+
+    #[test]
+    fn untransformed_pitch_predictors_need_no_pitch_control_inputs() {
+        let expected = infos(TRANSFORMED);
+        let stock = infos(&["length"]);
+        assert_eq!(["length"], *names(expected_inputs(true, &expected, &stock)));
+    }
+
+    #[test]
+    fn transformed_pitch_predictors_and_other_operations_keep_every_input() {
+        let expected = infos(TRANSFORMED);
+        let transformed = infos(TRANSFORMED);
+        assert_eq!(
+            TRANSFORMED,
+            names(expected_inputs(true, &expected, &transformed))
+        );
+        let stock = infos(&["length"]);
+        assert_eq!(
+            TRANSFORMED,
+            names(expected_inputs(false, &expected, &stock))
+        );
     }
 }

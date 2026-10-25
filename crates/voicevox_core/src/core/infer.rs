@@ -282,6 +282,20 @@ impl<D: PartialEq> ParamInfo<D> {
     }
 }
 
+/// Inputs the `azalea` fork adds to pitch predictors while loading.
+pub(crate) const PITCH_NOISE_INPUT: &str = "azalea_pitch_noise";
+pub(crate) const PITCH_PREFIX_INPUT: &str = "azalea_pitch_prefix";
+pub(crate) const PITCH_PREFIX_MASK_INPUT: &str = "azalea_pitch_prefix_mask";
+
+/// A pitch predictor the runtime could not transform lacks these inputs. It loads anyway and
+/// predicts without noise or fixed pitches; inputs it does not declare are dropped when it
+/// runs.
+pub(crate) const PITCH_CONTROL_INPUTS: [&str; 3] = [
+    PITCH_NOISE_INPUT,
+    PITCH_PREFIX_INPUT,
+    PITCH_PREFIX_MASK_INPUT,
+];
+
 #[derive(new, Clone, Copy, PartialEq, Debug)]
 pub(crate) struct InferenceSessionOptions {
     pub(crate) cpu_num_threads: u16,

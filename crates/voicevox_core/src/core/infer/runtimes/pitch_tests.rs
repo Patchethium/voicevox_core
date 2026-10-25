@@ -652,3 +652,30 @@ fn sequence_collection_feedback_and_rejection() -> anyhow::Result<()> {
     assert!(super::super::pitch_graph::transform(&model.write_to_bytes()?).is_err());
     Ok(())
 }
+
+#[test]
+fn stock_runtime_can_export_models() -> anyhow::Result<()> {
+    blocking::Onnxruntime::from_test_util_data()?;
+    ensure!(
+        can_export_models(),
+        "the export probe failed on the stock runtime"
+    );
+    Ok(())
+}
+
+#[test]
+fn untransformed_predictor_ignores_undeclared_pitch_inputs() -> anyhow::Result<()> {
+    let rt = blocking::Onnxruntime::from_test_util_data()?;
+    let model = ModelBytes::Onnx(
+        include_bytes!("../../../../../../model/sample.vvm/predict_intonation.onnx").to_vec(),
+    );
+    let options = InferenceSessionOptions::new(1, DeviceSpec::Cpu);
+    let session = Arc::new(rt.new_session(&model, options)?.0);
+    let without = prediction(session.clone(), 0, None, None)?;
+    let with = prediction(session, 0, Some(&[0.0; 5]), None)?;
+    ensure!(
+        without == with,
+        "dropped pitch inputs changed the prediction"
+    );
+    Ok(())
+}

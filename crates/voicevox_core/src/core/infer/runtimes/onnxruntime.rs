@@ -41,7 +41,7 @@ use super::super::{
         voice_model::ModelBytes,
     },
     InferenceRuntime, InferenceSessionOptions, InputScalarKind, OutputScalarKind, OutputTensor,
-    ParamInfo, PushInputTensor,
+    PITCH_CONTROL_INPUTS, ParamInfo, PushInputTensor,
 };
 
 const LIB_MIN_REQUIRED_MINOR_VERSION: u32 = ort::sys::ORT_API_VERSION;
@@ -276,6 +276,9 @@ impl InferenceRuntime for self::blocking::Onnxruntime {
     }
 
     fn split_talk_decoder(&self, model: &ModelBytes) -> anyhow::Result<Option<[ModelBytes; 2]>> {
+        if !can_export_models() {
+            return Ok(None);
+        }
         let started = std::time::Instant::now();
         let super::decoder_graph::SplitDecoder {
             spectrogram,
@@ -301,7 +304,7 @@ impl InferenceRuntime for self::blocking::Onnxruntime {
             LazyLock::new(|| ort::info().starts_with("VOICEVOX ORT Build Info: "));
 
         let transformed;
-        let model = if options.pitch_noise {
+        let model = if options.pitch_noise && can_export_models() {
             let started = std::time::Instant::now();
             transformed = ModelBytes::Onnx(
                 export_and_transform(model).context("export/transform pitch predictor")?,
@@ -309,6 +312,7 @@ impl InferenceRuntime for self::blocking::Onnxruntime {
             tracing::debug!(elapsed = ?started.elapsed(), "pitch predictor transformation");
             &transformed
         } else {
+            // Without exports the stock predictor loads as is; see `PITCH_CONTROL_INPUTS`.
             model
         };
 
@@ -481,7 +485,9 @@ impl InferenceRuntime for self::blocking::Onnxruntime {
     fn run_blocking(
         OnnxruntimeRunContext { sess, inputs }: Self::RunContext,
     ) -> anyhow::Result<Vec<OutputTensor>> {
-        extract_outputs(&sess.lock_blocking().run(inputs)?)
+        let mut sess = sess.lock_blocking();
+        let inputs = declared_inputs(&sess, inputs);
+        extract_outputs(&sess.run(inputs)?)
     }
 
     async fn run_async(
@@ -489,15 +495,16 @@ impl InferenceRuntime for self::blocking::Onnxruntime {
         cancellable: bool,
     ) -> anyhow::Result<Vec<OutputTensor>> {
         if cancellable {
-            extract_outputs(
-                &sess
-                    .lock()
-                    .await
-                    .run_async(inputs, &RunOptions::new()?)?
-                    .await?,
-            )
+            let mut sess = sess.lock().await;
+            let inputs = declared_inputs(&sess, inputs);
+            extract_outputs(&sess.run_async(inputs, &RunOptions::new()?)?.await?)
         } else {
-            ::blocking::unblock(move || extract_outputs(&sess.lock_blocking().run(inputs)?)).await
+            ::blocking::unblock(move || {
+                let mut sess = sess.lock_blocking();
+                let inputs = declared_inputs(&sess, inputs);
+                extract_outputs(&sess.run(inputs)?)
+            })
+            .await
         }
     }
 }
@@ -745,6 +752,14 @@ pub(crate) mod blocking {
         pub fn supported_devices(&self) -> crate::Result<SupportedDevices> {
             <Self as InferenceRuntime>::supported_devices(self)
         }
+
+        /// Whether pitch noise and pitch completion are available (`azalea` fork): they need
+        /// a runtime that can export models, which VOICEVOX ONNX Runtime 1.23 refuses.
+        /// Without it, pitch predictions use zero noise and requests for noise or fixed
+        /// pitches fail, and monolithic talk decoders do not stream.
+        pub fn supports_pitch_control(&self) -> bool {
+            super::can_export_models()
+        }
     }
 
     const _: () = assert!(
@@ -922,6 +937,11 @@ pub(crate) mod nonblocking {
         pub fn supported_devices(&self) -> crate::Result<SupportedDevices> {
             self.0.supported_devices()
         }
+
+        /// Same as the blocking [`supports_pitch_control`](super::blocking::Onnxruntime::supports_pitch_control).
+        pub fn supports_pitch_control(&self) -> bool {
+            self.0.supports_pitch_control()
+        }
     }
 
     const _: () = assert!(
@@ -985,6 +1005,41 @@ mod tests {
         // 環境によって結果が変わるので、関数呼び出しが成功するかどうかの確認のみ行う
         assert!(result.is_ok(), "{result:?}");
     }
+}
+
+/// Drops the pitch-control inputs a session does not declare: an untransformed pitch predictor
+/// (`azalea` fork).
+fn declared_inputs(
+    sess: &ort::session::Session,
+    mut inputs: Vec<(&'static str, ort::session::SessionInputValue<'static>)>,
+) -> Vec<(&'static str, ort::session::SessionInputValue<'static>)> {
+    inputs.retain(|(name, _)| {
+        !PITCH_CONTROL_INPUTS.contains(name) || sess.inputs().iter().any(|i| i.name() == *name)
+    });
+    inputs
+}
+
+/// Whether this ONNX Runtime can export models (`azalea` fork). Pitch noise, pitch completion
+/// and the split of monolithic talk decoders transform exported models. VOICEVOX ONNX Runtime
+/// 1.23 refuses to export models; pitch predictors then load untransformed and monolithic
+/// decoders unsplit. Probed once per process with a one-node model.
+pub(crate) fn can_export_models() -> bool {
+    static CAN_EXPORT: LazyLock<bool> = LazyLock::new(|| {
+        match export_onnx(
+            &ModelBytes::Onnx(super::pitch_graph::export_probe_model()),
+            "export probe",
+        ) {
+            Ok(_) => true,
+            Err(error) => {
+                warn!(
+                    "this ONNX Runtime cannot export models, so pitch noise, pitch completion \
+                     and streaming of monolithic talk decoders are unavailable: {error:#}"
+                );
+                false
+            }
+        }
+    });
+    *CAN_EXPORT
 }
 
 fn export_and_transform(model: &ModelBytes) -> anyhow::Result<Vec<u8>> {
